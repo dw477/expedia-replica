@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1130" viewBox="0 0 1600 1130" role="img" aria-labelledby="title desc">
+<title id="title">Expedia Lite: how the CSV files connect</title>
+<desc id="desc">Hotels and users are source records. One hotel can be used in many trips. One trip can be referenced by many bookings, and one user can have many bookings. trips.hotel_id matches hotels.hotel_id. bookings.trip_id matches trips.trip_id. bookings.user_id matches users.user_id.</desc>
+<rect width="1600" height="1130" fill="#F6F8FB"/>
+<text x="60" y="81.38" font-family="Arial, sans-serif" font-size="42" font-weight="bold" fill="#19354D">Expedia Lite: how the CSV files connect</text>
+<text x="60" y="123.25" font-family="Arial, sans-serif" font-size="25" font-weight="normal" fill="#456177">Match the IDs to combine information. Each arrow means one source row can have many references.</text>
+<rect x="60" y="175" width="630" height="352" rx="14" fill="#FFFFFF" stroke="#C3CDD8" stroke-width="2"/>
+<rect x="60" y="175" width="630" height="67" rx="14" fill="#19354D" stroke="none" stroke-width="2"/>
+<rect x="60" y="215" width="630" height="27" rx="0" fill="#19354D" stroke="none" stroke-width="2"/>
+<text x="84" y="217.92000000000002" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#FFFFFF">hotels.csv</text>
+<text x="84" y="278.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#456177">8 hotels</text>
+<text x="84" y="323.36" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#19354D">hotel_id</text>
+<text x="360" y="322.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">H001</text>
+<text x="490" y="320.69" font-family="Arial, sans-serif" font-size="21" font-weight="normal" fill="#456177">unique ID</text>
+<text x="84" y="365.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">hotel_name</text>
+<text x="360" y="364.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">Harbor Lantern Hotel</text>
+<text x="84" y="407.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">city</text>
+<text x="360" y="406.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">Boston</text>
+<text x="84" y="449.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">state</text>
+<text x="360" y="448.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">MA</text>
+<text x="84" y="491.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">nightly_rate_usd</text>
+<text x="360" y="490.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">150</text>
+<rect x="910" y="175" width="630" height="229" rx="14" fill="#FFFFFF" stroke="#C3CDD8" stroke-width="2"/>
+<rect x="910" y="175" width="630" height="67" rx="14" fill="#19354D" stroke="none" stroke-width="2"/>
+<rect x="910" y="215" width="630" height="27" rx="0" fill="#19354D" stroke="none" stroke-width="2"/>
+<text x="934" y="217.92000000000002" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#FFFFFF">users.csv</text>
+<text x="934" y="278.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#456177">6 demo travelers</text>
+<text x="934" y="323.36" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#19354D">user_id</text>
+<text x="1210" y="322.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">U001</text>
+<text x="1340" y="320.69" font-family="Arial, sans-serif" font-size="21" font-weight="normal" fill="#456177">unique ID</text>
+<text x="934" y="365.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">display_name</text>
+<text x="1210" y="364.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">Demo Traveler 1</text>
+<rect x="60" y="672" width="630" height="352" rx="14" fill="#FFFFFF" stroke="#C3CDD8" stroke-width="2"/>
+<rect x="60" y="672" width="630" height="67" rx="14" fill="#19354D" stroke="none" stroke-width="2"/>
+<rect x="60" y="712" width="630" height="27" rx="0" fill="#19354D" stroke="none" stroke-width="2"/>
+<text x="84" y="714.92" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#FFFFFF">trips.csv</text>
+<text x="84" y="775.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#456177">12 offered hotel stays</text>
+<text x="84" y="820.36" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#19354D">trip_id</text>
+<text x="360" y="819.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">T001</text>
+<text x="490" y="817.69" font-family="Arial, sans-serif" font-size="21" font-weight="normal" fill="#456177">unique ID</text>
+<text x="84" y="862.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">hotel_id</text>
+<text x="360" y="861.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">H001</text>
+<text x="490" y="859.69" font-family="Arial, sans-serif" font-size="21" font-weight="normal" fill="#456177">reference</text>
+<text x="84" y="904.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">trip_name</text>
+<text x="360" y="903.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">Boston Harbor Weekend</text>
+<text x="84" y="946.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">check_in</text>
+<text x="360" y="945.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">2026-09-18</text>
+<text x="84" y="988.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">check_out</text>
+<text x="360" y="987.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">2026-09-20</text>
+<rect x="910" y="672" width="630" height="352" rx="14" fill="#FFFFFF" stroke="#C3CDD8" stroke-width="2"/>
+<rect x="910" y="672" width="630" height="67" rx="14" fill="#19354D" stroke="none" stroke-width="2"/>
+<rect x="910" y="712" width="630" height="27" rx="0" fill="#19354D" stroke="none" stroke-width="2"/>
+<text x="934" y="714.92" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#FFFFFF">bookings.csv</text>
+<text x="934" y="775.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#456177">6 simulated reservations</text>
+<text x="934" y="820.36" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#19354D">booking_id</text>
+<text x="1210" y="819.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">B001</text>
+<text x="1340" y="817.69" font-family="Arial, sans-serif" font-size="21" font-weight="normal" fill="#456177">unique ID</text>
+<text x="934" y="862.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">user_id</text>
+<text x="1210" y="861.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">U001</text>
+<text x="1340" y="859.69" font-family="Arial, sans-serif" font-size="21" font-weight="normal" fill="#456177">reference</text>
+<text x="934" y="904.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">trip_id</text>
+<text x="1210" y="903.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">T001</text>
+<text x="1340" y="901.69" font-family="Arial, sans-serif" font-size="21" font-weight="normal" fill="#456177">reference</text>
+<text x="934" y="946.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">booked_on</text>
+<text x="1210" y="945.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">2026-09-01</text>
+<text x="934" y="988.36" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="#19354D">status</text>
+<text x="1210" y="987.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#294D64">confirmed</text>
+<polyline points="355,529 355,669" fill="none" stroke="#395A73" stroke-width="5" stroke-linejoin="round"/><polygon points="355,669 345,652 365,652" fill="#395A73"/>
+<rect x="75" y="573" width="565" height="51" rx="0" fill="#F6F8FB" stroke="none" stroke-width="2"/>
+<text x="96" y="605.03" font-family="Arial, sans-serif" font-size="27" font-weight="bold" fill="#19354D">hotel_id: one hotel → many trips</text>
+<polyline points="1210,406 1210,669" fill="none" stroke="#395A73" stroke-width="5" stroke-linejoin="round"/><polygon points="1210,669 1200,652 1220,652" fill="#395A73"/>
+<rect x="940" y="505" width="560" height="51" rx="0" fill="#F6F8FB" stroke="none" stroke-width="2"/>
+<text x="954" y="536.14" font-family="Arial, sans-serif" font-size="26" font-weight="bold" fill="#19354D">user_id: one user → many bookings</text>
+<polyline points="692,846 907,846" fill="none" stroke="#395A73" stroke-width="5" stroke-linejoin="round"/><polygon points="907,846 890,836 890,856" fill="#395A73"/>
+<text x="718" y="765.25" font-family="Arial, sans-serif" font-size="25" font-weight="bold" fill="#19354D">trip_id</text>
+<text x="714" y="801.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#19354D">one trip</text>
+<text x="711" y="895.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#19354D">many</text>
+<text x="709" y="926.47" font-family="Arial, sans-serif" font-size="23" font-weight="normal" fill="#19354D">bookings</text>
+<text x="60" y="1089.25" font-family="Arial, sans-serif" font-size="25" font-weight="bold" fill="#19354D">Example: B001 connects Demo Traveler 1 (U001) to Boston Harbor Weekend (T001) at hotel H001.</text>
+</svg>

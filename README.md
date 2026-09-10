@@ -4,10 +4,12 @@
 
 Build a small, maintainable travel application with a clear separation between the user interface and server-side responsibilities.
 
+The specific product requirements and technology choices can be documented here as the assignment evolves.
+
+## Project Layout
+
 - `frontend/` contains the client application and its tests.
 - `backend/` contains APIs, business logic, persistence, and server-side tests.
-
-The specific product requirements and technology choices can be documented here as the assignment evolves.
 
 ## Setup
 
