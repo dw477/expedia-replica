@@ -22,6 +22,19 @@ backend/.venv/bin/python -m pip install -r backend/requirements.txt
 
 Run backend Python commands with `backend/.venv/bin/python` so dependencies remain isolated from the system interpreter.
 
+The backend uses Python's standard-library SQLite support, so no database server or
+additional package is required. Create and seed the local development database from
+the four CSV files with:
+
+```sh
+backend/.venv/bin/python -m backend.database
+```
+
+The database defaults to `backend/expedia.sqlite3`. Set `EXPEDIA_DATABASE_PATH` to
+use another location. The backend also initializes the database automatically on
+startup. Starter records are imported only once, so later database changes survive
+application restarts.
+
 The frontend uses Vue with Vite and requires a Node.js version accepted by the `engines` field in `frontend/package.json`:
 
 ```sh

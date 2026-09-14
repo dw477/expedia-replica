@@ -17,7 +17,13 @@ backend functions but do not duplicate search or pricing rules.
 
 ## Backend logic
 
-The framework-free backend owns data access and calculations. It reads the
-supplied CSV files, joins trips to hotels, matches hotel names, validates source
-data, and calculates nights and total stay prices. Keeping this logic independent
-of FastAPI makes it directly testable and reusable from other interfaces.
+The framework-free backend owns data access and calculations. `backend/database.py`
+is the source of truth for the SQLite schema and imports the supplied CSV files in
+one transaction the first time a database is initialized. A metadata marker keeps
+later application changes from being overwritten or duplicated on restart.
+
+Search joins trips to hotels in SQLite, matches hotel names, and calculates nights
+and total stay prices. Money is stored as integer cents to avoid floating-point
+rounding, while dates use validated ISO `YYYY-MM-DD` text. Connections enable
+foreign-key enforcement. Keeping these responsibilities independent of FastAPI
+makes them directly testable and reusable from other interfaces.

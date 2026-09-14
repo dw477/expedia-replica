@@ -9,8 +9,10 @@ The first end-to-end hotel search is implemented on `main`.
 - `frontend/src/api/stays.js` sends the request separately from the presentation
   code in `frontend/src/App.vue`.
 - FastAPI exposes `GET /api/stays?hotel_name=...` and returns JSON.
-- The framework-free backend reads the supplied hotel and trip CSV files, joins
-  them by `hotel_id`, and returns each matching fixed-date stay.
+- The framework-free backend queries SQLite, joins hotels and trips by `hotel_id`,
+  and returns each matching fixed-date stay.
+- SQLite is initialized automatically and imports all four starter CSV files only
+  once. A seed marker preserves later booking changes and deletions across restarts.
 - Nights and total stay prices are calculated by the backend.
 - The interface shows loading and error states, a labeled result table, and a
   clear message when no hotel matches.
@@ -27,7 +29,8 @@ npm run lint
 npm run build
 ```
 
-- All 10 backend tests passed, covering hotel-name matching, calculated nights
+- All 13 backend tests passed, covering one-time CSV seeding, persistence across
+  reinitialization, foreign-key enforcement, hotel-name matching, calculated nights
   and prices, the API response, no matches, and the required query parameter.
 - Backend tests emitted two deprecation warnings from the installed
   FastAPI/Starlette test dependencies; there were no test failures.
@@ -40,7 +43,8 @@ npm run build
 
 - Search is limited to hotel names; there are no city, date, price, or availability
   filters beyond the fixed stays in `trips.csv`.
-- Data is read-only CSV data. There is no SQLite persistence or write workflow.
+- The SQLite schema and seed path are ready, but booking write endpoints and their
+  repository operations have not been implemented.
 - Booking creation, cancellation, deletion, traveler history, authentication,
   payments, taxes, and fees are not implemented.
 - The frontend has no automated component or browser tests. Its current evidence
@@ -51,10 +55,8 @@ npm run build
 
 ## Next step
 
-Confirm the Part 2 scope, then add a SQLite-backed repository that imports the
-starter CSV records only when the database is first created. Preserve the current
-FastAPI JSON contract while replacing direct CSV reads, and add persistence tests
-before building booking and traveler-history interfaces.
+Add SQLite-backed booking creation, cancellation, deletion, and traveler-history
+operations while preserving the current FastAPI JSON contract for search.
 
 ## Repository state
 

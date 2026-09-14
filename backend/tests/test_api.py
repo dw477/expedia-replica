@@ -1,12 +1,16 @@
+import pytest
 from fastapi.testclient import TestClient
 
-from backend.app import app
+from backend.app import create_app
 
 
-client = TestClient(app)
+@pytest.fixture
+def client(tmp_path):
+    with TestClient(create_app(tmp_path / "expedia.sqlite3")) as test_client:
+        yield test_client
 
 
-def test_search_endpoint_returns_existing_calculated_results():
+def test_search_endpoint_returns_existing_calculated_results(client):
     response = client.get("/api/stays", params={"hotel_name": "Harbor Lantern"})
 
     assert response.status_code == 200
@@ -26,14 +30,14 @@ def test_search_endpoint_returns_existing_calculated_results():
     }
 
 
-def test_search_endpoint_returns_empty_json_for_no_matches():
+def test_search_endpoint_returns_empty_json_for_no_matches(client):
     response = client.get("/api/stays", params={"hotel_name": "Atlantis Hotel"})
 
     assert response.status_code == 200
     assert response.json() == []
 
 
-def test_search_endpoint_requires_a_hotel_name_parameter():
+def test_search_endpoint_requires_a_hotel_name_parameter(client):
     response = client.get("/api/stays")
 
     assert response.status_code == 422
