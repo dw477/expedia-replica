@@ -21,7 +21,7 @@ from backend.database import (
 
 
 class SearchDataError(ValueError):
-    """Raised when the supplied CSV data cannot produce valid search results."""
+    """Raised when stored data cannot produce valid search results."""
 
 
 @dataclass(frozen=True)

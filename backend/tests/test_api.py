@@ -41,3 +41,49 @@ def test_search_endpoint_requires_a_hotel_name_parameter(client):
     response = client.get("/api/stays")
 
     assert response.status_code == 422
+
+
+def test_booking_crud_flow(client):
+    users_response = client.get("/api/users")
+    assert users_response.status_code == 200
+    assert users_response.json()[-1] == {
+        "user_id": "U006",
+        "display_name": "Demo Traveler 6",
+    }
+
+    create_response = client.post(
+        "/api/bookings", json={"user_id": "U006", "trip_id": "T001"}
+    )
+    assert create_response.status_code == 201
+    booking = create_response.json()
+    assert booking["user_id"] == "U006"
+    assert booking["trip_id"] == "T001"
+    assert booking["status"] == "confirmed"
+
+    history_response = client.get("/api/bookings", params={"user_id": "U006"})
+    assert history_response.status_code == 200
+    assert [item["booking_id"] for item in history_response.json()] == [
+        booking["booking_id"]
+    ]
+
+    cancel_response = client.patch(
+        f"/api/bookings/{booking['booking_id']}", json={"status": "cancelled"}
+    )
+    assert cancel_response.status_code == 200
+    assert cancel_response.json()["status"] == "cancelled"
+
+    delete_response = client.delete(f"/api/bookings/{booking['booking_id']}")
+    assert delete_response.status_code == 204
+    assert client.get("/api/bookings", params={"user_id": "U006"}).json() == []
+
+
+def test_booking_endpoints_return_domain_errors(client):
+    duplicate = client.post(
+        "/api/bookings", json={"user_id": "U001", "trip_id": "T001"}
+    )
+    missing_user = client.get("/api/bookings", params={"user_id": "missing"})
+    missing_booking = client.delete("/api/bookings/missing")
+
+    assert duplicate.status_code == 409
+    assert missing_user.status_code == 404
+    assert missing_booking.status_code == 404

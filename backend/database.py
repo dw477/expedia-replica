@@ -73,6 +73,11 @@ SCHEMA_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_trips_hotel_id ON trips(hotel_id)",
     "CREATE INDEX IF NOT EXISTS idx_bookings_user_id ON bookings(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_bookings_trip_id ON bookings(trip_id)",
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_unique_confirmed
+    ON bookings(user_id, trip_id)
+    WHERE status = 'confirmed'
+    """,
 )
 
 

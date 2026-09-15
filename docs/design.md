@@ -27,3 +27,9 @@ and total stay prices. Money is stored as integer cents to avoid floating-point
 rounding, while dates use validated ISO `YYYY-MM-DD` text. Connections enable
 foreign-key enforcement. Keeping these responsibilities independent of FastAPI
 makes them directly testable and reusable from other interfaces.
+
+Booking creation, history, status changes, and deletion live in
+`backend/bookings.py`. The browser never opens SQLite directly: frontend API
+modules send HTTP requests to FastAPI, and FastAPI delegates persistence to the
+framework-free booking functions. Confirmed bookings are unique per traveler and
+trip, while cancelled bookings remain visible until explicitly deleted.

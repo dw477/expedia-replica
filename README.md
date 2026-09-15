@@ -35,6 +35,15 @@ use another location. The backend also initializes the database automatically on
 startup. Starter records are imported only once, so later database changes survive
 application restarts.
 
+The frontend sends all searches and booking operations through FastAPI. Available
+booking routes are:
+
+- `GET /api/users`
+- `GET /api/bookings?user_id=U001`
+- `POST /api/bookings`
+- `PATCH /api/bookings/{booking_id}`
+- `DELETE /api/bookings/{booking_id}`
+
 The frontend uses Vue with Vite and requires a Node.js version accepted by the `engines` field in `frontend/package.json`:
 
 ```sh

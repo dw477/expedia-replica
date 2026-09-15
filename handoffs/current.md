@@ -13,6 +13,9 @@ The first end-to-end hotel search is implemented on `main`.
   and returns each matching fixed-date stay.
 - SQLite is initialized automatically and imports all four starter CSV files only
   once. A seed marker preserves later booking changes and deletions across restarts.
+- The Vue interface can select a traveler and searched stay, create a booking, load
+  booking history, cancel a confirmed booking, and permanently delete a booking.
+- All frontend data operations use FastAPI; SQLite access stays in the backend.
 - Nights and total stay prices are calculated by the backend.
 - The interface shows loading and error states, a labeled result table, and a
   clear message when no hotel matches.
@@ -29,9 +32,10 @@ npm run lint
 npm run build
 ```
 
-- All 13 backend tests passed, covering one-time CSV seeding, persistence across
+- All 20 backend tests passed, covering one-time CSV seeding, persistence across
   reinitialization, foreign-key enforcement, hotel-name matching, calculated nights
-  and prices, the API response, no matches, and the required query parameter.
+  and prices, booking CRUD and conflicts, API responses, no matches, and required
+  query parameters.
 - Backend tests emitted two deprecation warnings from the installed
   FastAPI/Starlette test dependencies; there were no test failures.
 - Frontend lint passed without adding dependencies.
@@ -43,10 +47,8 @@ npm run build
 
 - Search is limited to hotel names; there are no city, date, price, or availability
   filters beyond the fixed stays in `trips.csv`.
-- The SQLite schema and seed path are ready, but booking write endpoints and their
-  repository operations have not been implemented.
-- Booking creation, cancellation, deletion, traveler history, authentication,
-  payments, taxes, and fees are not implemented.
+- Authentication, payments, taxes, and fees are not implemented. Demo travelers
+  are selected explicitly in the interface.
 - The frontend has no automated component or browser tests. Its current evidence
   is lint, production build, and the live proxy check.
 - The Vite proxy is a development setup. Production hosting and cross-origin
@@ -55,11 +57,11 @@ npm run build
 
 ## Next step
 
-Add SQLite-backed booking creation, cancellation, deletion, and traveler-history
-operations while preserving the current FastAPI JSON contract for search.
+Add authentication and replace demo-traveler selection with a signed-in user before
+introducing any real reservation or payment workflow.
 
 ## Repository state
 
-The remote is `https://github.com/dw477/expedia-replica.git`. Commit `4c4dfc9`
-(`Implement hotel availability search`) is on `origin/main`. This handoff and
-`docs/design.md` are uncommitted documentation changes created afterward.
+The remote is `https://github.com/dw477/expedia-replica.git`. Branch
+`database-integration` contains commit `225fb0a` (`Add SQLite database integration`)
+plus the current uncommitted booking workflow changes.
