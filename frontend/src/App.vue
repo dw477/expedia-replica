@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 
 import {
   createBooking,
@@ -10,11 +10,16 @@ import {
 } from './api/bookings.js'
 import { searchAvailableStays } from './api/stays.js'
 
+import StayCard from './components/StayCard.vue'
+import { sortStays } from './utils/stays.js'
+
 const hotelName = ref('')
+const priceOrder = ref('recommended')
 const searchError = ref('')
 const hasSearched = ref(false)
 const isSearchLoading = ref(false)
 const stays = ref([])
+const visibleStays = computed(() => sortStays(stays.value, priceOrder.value))
 
 const users = ref([])
 const selectedUserId = ref('')
@@ -69,11 +74,15 @@ async function submitSearch() {
   }
 }
 
-function chooseStay(stay) {
+async function chooseStay(stay) {
   selectedTripId.value = stay.trip_id
   bookingError.value = ''
   bookingNotice.value = `${stay.trip_name} selected. Complete the booking form below.`
-  document.querySelector('#booking-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  await nextTick()
+  const bookingForm = document.querySelector('#booking-form')
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  bookingForm?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' })
+  document.querySelector('#selected-stay')?.focus({ preventScroll: true })
 }
 
 async function loadUsers() {
@@ -167,6 +176,15 @@ async function removeBooking(bookingId) {
   }
 }
 
+function searchHotel(name) {
+  hotelName.value = name
+  submitSearch()
+}
+
+function focusSearch() {
+  document.querySelector('#hotel-name')?.focus()
+}
+
 onMounted(loadUsers)
 </script>
 
@@ -174,207 +192,227 @@ onMounted(loadUsers)
   <main class="page-shell">
     <header class="hero" aria-labelledby="page-title">
       <p class="eyebrow">Expedia Lite</p>
-      <h1 id="page-title">Search, book, and manage a stay</h1>
-      <p class="intro">Explore the travel offers stored in SQLite and manage demo bookings.</p>
+      <h1 id="page-title">Find your next<br />hotel stay.</h1>
+      <p class="intro">A little getaway. A great place to stay.</p>
     </header>
 
-    <section class="card search-card" aria-labelledby="search-title">
-      <div class="section-heading">
-        <div>
-          <p class="step-label">Step 1</p>
-          <h2 id="search-title">Find a hotel stay</h2>
-        </div>
-      </div>
-
-      <form class="search-form" @submit.prevent="submitSearch">
-        <label for="hotel-name">Hotel name</label>
-        <div class="search-controls">
-          <input
-            id="hotel-name"
-            v-model="hotelName"
-            name="hotel-name"
-            type="search"
-            placeholder="Try Harbor Lantern"
-          />
-          <button class="primary-button" type="submit" :disabled="isSearchLoading">
-            {{ isSearchLoading ? 'Searching…' : 'Search' }}
-          </button>
-        </div>
-      </form>
-
-      <div class="message error-message" role="alert" aria-live="assertive">
-        <p v-if="searchError">{{ searchError }}</p>
-      </div>
-
-      <div class="results-heading">
-        <h3>Available stays</h3>
-        <span v-if="hasSearched">{{ stays.length }} result{{ stays.length === 1 ? '' : 's' }}</span>
-      </div>
-
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Hotel</th>
-              <th scope="col">Trip</th>
-              <th scope="col">Dates</th>
-              <th scope="col">Stay price</th>
-              <th scope="col"><span class="visually-hidden">Booking action</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="stay in stays" :key="stay.trip_id">
-              <td>
-                <strong>{{ stay.hotel_name }}</strong>
-                <span>{{ stay.city }}, {{ stay.state }}</span>
-              </td>
-              <td>
-                {{ stay.trip_name }}
-                <span>{{ stay.nights }} night{{ stay.nights === 1 ? '' : 's' }}</span>
-              </td>
-              <td>{{ stay.check_in }}–{{ stay.check_out }}</td>
-              <td>
-                <strong>{{ formatCurrency(stay.stay_price_usd) }}</strong>
-                <span>{{ formatCurrency(stay.nightly_rate_usd) }} nightly</span>
-              </td>
-              <td class="action-cell">
-                <button
-                  class="secondary-button"
-                  type="button"
-                  :aria-pressed="selectedTripId === stay.trip_id"
-                  @click="chooseStay(stay)"
-                >
-                  {{ selectedTripId === stay.trip_id ? 'Selected' : 'Book stay' }}
-                </button>
-              </td>
-            </tr>
-            <tr v-if="!stays.length">
-              <td class="empty-result" colspan="5">
-                {{
-                  hasSearched
-                    ? 'No available stays match that hotel name.'
-                    : 'Search for a hotel name to see available stays.'
-                }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="card booking-card" aria-labelledby="booking-title">
-      <div class="section-heading">
-        <div>
-          <p class="step-label">Step 2</p>
-          <h2 id="booking-title">Create a booking</h2>
-        </div>
-      </div>
-
-      <form id="booking-form" class="booking-form" @submit.prevent="submitBooking">
-        <div class="field">
-          <label for="traveler">Traveler</label>
-          <select
-            id="traveler"
-            v-model="selectedUserId"
-            name="traveler"
-            required
-            :disabled="!users.length"
-            @change="loadBookingHistory"
+    <div class="phone-frame">
+      <div class="phone-screen">
+        <header class="app-header">
+          <button
+            class="back-button"
+            type="button"
+            aria-label="Go to hotel search"
+            @click="focusSearch"
           >
-            <option value="" disabled>Choose a traveler</option>
-            <option v-for="user in users" :key="user.user_id" :value="user.user_id">
-              {{ user.display_name }}
-            </option>
-          </select>
-        </div>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="m15 4-8 8 8 8" />
+            </svg>
+          </button>
+          <div>
+            <h2>Choose stay</h2>
+            <p>Find a hotel. Make it a getaway.</p>
+          </div>
+          <a class="trips-link" href="#history-title" aria-label="Go to booking history">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="4" y="7" width="16" height="14" rx="3" />
+              <path d="M9 7V5a3 3 0 0 1 6 0v2M9 11v6m6-6v6" />
+            </svg>
+          </a>
+        </header>
 
-        <div class="field">
-          <label for="selected-stay">Stay</label>
-          <select id="selected-stay" v-model="selectedTripId" name="selected-stay" required>
-            <option value="" disabled>Search and choose a stay</option>
-            <option v-for="stay in stays" :key="stay.trip_id" :value="stay.trip_id">
-              {{ stay.hotel_name }} · {{ stay.check_in }} to {{ stay.check_out }}
-            </option>
-          </select>
-        </div>
+        <section class="search-section" aria-labelledby="search-title">
+          <h2 id="search-title" class="visually-hidden">Find a hotel stay</h2>
+          <form class="search-form" @submit.prevent="submitSearch">
+            <label for="hotel-name">Hotel name</label>
+            <div class="search-controls">
+              <input
+                id="hotel-name"
+                v-model="hotelName"
+                name="hotel-name"
+                type="search"
+                placeholder="Try Harbor Lantern"
+                :aria-invalid="Boolean(searchError)"
+                :aria-describedby="searchError ? 'search-error' : undefined"
+              />
+              <button class="primary-button" type="submit" :disabled="isSearchLoading">
+                {{ isSearchLoading ? 'Searching…' : 'Search' }}
+              </button>
+            </div>
+          </form>
+          <p v-if="searchError" id="search-error" class="message-text error-text" role="alert">
+            {{ searchError }}
+          </p>
+          <div class="filter-row">
+            <label class="sort-control" for="price-order">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M4 7h16M4 17h16" />
+                <circle cx="9" cy="7" r="3" />
+                <circle cx="15" cy="17" r="3" />
+              </svg>
+              <select id="price-order" v-model="priceOrder" aria-label="Sort stays by price">
+                <option value="recommended">Original order</option>
+                <option value="low">Price: low to high</option>
+                <option value="high">Price: high to low</option>
+              </select>
+            </label>
+            <span class="filter-note">Hotel stays</span>
+          </div>
+        </section>
 
-        <button
-          class="primary-button booking-submit"
-          type="submit"
-          :disabled="isBookingSaving || !users.length"
-        >
-          {{ isBookingSaving ? 'Creating…' : 'Create booking' }}
-        </button>
-      </form>
+        <section class="stays-section" aria-labelledby="results-title" :aria-busy="isSearchLoading">
+          <div class="results-heading">
+            <h2 id="results-title">
+              {{ hasSearched ? 'Available stays' : 'Your getaway starts here' }}
+            </h2>
+            <span v-if="hasSearched" role="status"
+              >{{ stays.length }} result{{ stays.length === 1 ? '' : 's' }}</span
+            >
+          </div>
+          <p v-if="isSearchLoading" class="loading-message" role="status">Finding your stays…</p>
+          <div v-else-if="hasSearched && stays.length" class="stay-list">
+            <StayCard
+              v-for="stay in visibleStays"
+              :key="stay.trip_id"
+              :stay="stay"
+              :selected="selectedTripId === stay.trip_id"
+              @choose="chooseStay(stay)"
+            />
+          </div>
+          <div v-else class="empty-search">
+            <div class="empty-illustration" aria-hidden="true">
+              <svg viewBox="0 0 80 80" fill="none">
+                <path
+                  d="M18 63V24h44v39M12 63h56M30 63V49h20v14M27 34h5m16 0h5M27 42h5m16 0h5M34 24v-8h12v8"
+                />
+              </svg>
+            </div>
+            <h3>{{ hasSearched ? 'No stays found' : 'Somewhere new is calling.' }}</h3>
+            <p>
+              {{
+                hasSearched
+                  ? 'Try another hotel name to find an available stay.'
+                  : 'Search by hotel name to explore available dates and prices.'
+              }}
+            </p>
+            <div class="search-suggestions" aria-label="Hotel search shortcuts">
+              <button type="button" @click="searchHotel('Harbor Lantern')">
+                Harbor Lantern <span aria-hidden="true">↗</span>
+              </button>
+              <button type="button" @click="searchHotel('Maple Square')">
+                Maple Square <span aria-hidden="true">↗</span>
+              </button>
+            </div>
+          </div>
+        </section>
 
-      <div class="message-stack" aria-live="polite">
-        <p v-if="bookingError" class="message-text error-text" role="alert">{{ bookingError }}</p>
-        <p v-if="bookingNotice" class="message-text success-text">{{ bookingNotice }}</p>
-      </div>
-    </section>
+        <section class="booking-section" aria-labelledby="booking-title">
+          <div class="section-heading">
+            <p class="step-label">Make it yours</p>
+            <h2 id="booking-title">Book your stay</h2>
+            <p>Choose your traveler and preferred dates.</p>
+          </div>
+          <form id="booking-form" class="booking-form" @submit.prevent="submitBooking">
+            <div class="field">
+              <label for="traveler">Traveler</label>
+              <select
+                id="traveler"
+                v-model="selectedUserId"
+                name="traveler"
+                required
+                :disabled="!users.length"
+                @change="loadBookingHistory"
+              >
+                <option value="" disabled>Choose a traveler</option>
+                <option v-for="user in users" :key="user.user_id" :value="user.user_id">
+                  {{ user.display_name }}
+                </option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="selected-stay">Stay &amp; dates</label>
+              <select id="selected-stay" v-model="selectedTripId" name="selected-stay" required>
+                <option value="" disabled>Search and choose a stay</option>
+                <option v-for="stay in stays" :key="stay.trip_id" :value="stay.trip_id">
+                  {{ stay.hotel_name }} · {{ stay.check_in }} to {{ stay.check_out }}
+                </option>
+              </select>
+            </div>
+            <button
+              class="primary-button booking-submit"
+              type="submit"
+              :disabled="isBookingSaving || !users.length"
+            >
+              {{ isBookingSaving ? 'Creating…' : 'Create booking' }}
+              <span aria-hidden="true">→</span>
+            </button>
+          </form>
+          <div class="message-stack" aria-live="polite">
+            <p v-if="bookingError" class="message-text error-text" role="alert">
+              {{ bookingError }}
+            </p>
+            <p v-if="bookingNotice" class="message-text success-text">{{ bookingNotice }}</p>
+          </div>
+        </section>
 
-    <section class="card history-card" aria-labelledby="history-title" aria-live="polite">
-      <div class="section-heading history-heading">
-        <div>
-          <p class="step-label">Step 3</p>
-          <h2 id="history-title">Booking history</h2>
-        </div>
-        <span v-if="selectedUserId">{{ selectedUserName() }}</span>
-      </div>
-
-      <p v-if="isHistoryLoading" class="loading-message">Loading booking history…</p>
-      <p v-else-if="historyError" class="message-text error-text" role="alert">
-        {{ historyError }}
-      </p>
-
-      <div v-else class="booking-list">
-        <article v-for="booking in bookings" :key="booking.booking_id" class="booking-item">
-          <div class="booking-summary">
-            <div>
+        <section class="history-section" aria-labelledby="history-title" aria-live="polite">
+          <div class="section-heading history-heading">
+            <p class="step-label">Your travel plans</p>
+            <h2 id="history-title" tabindex="-1">My bookings</h2>
+            <p v-if="selectedUserId">{{ selectedUserName() }}</p>
+          </div>
+          <p v-if="isHistoryLoading" class="loading-message">Loading booking history…</p>
+          <p v-else-if="historyError" class="message-text error-text" role="alert">
+            {{ historyError }}
+          </p>
+          <div v-else class="booking-list">
+            <article v-for="booking in bookings" :key="booking.booking_id" class="booking-item">
               <div class="booking-id-row">
-                <strong>{{ booking.hotel_name }}</strong>
-                <span class="status-pill" :class="`status-${booking.status}`">
-                  {{ booking.status }}
-                </span>
+                <span class="status-pill" :class="`status-${booking.status}`">{{
+                  booking.status
+                }}</span>
+                <span class="booking-reference">{{ booking.booking_id }}</span>
               </div>
+              <h3>{{ booking.hotel_name }}</h3>
               <p>{{ booking.trip_name }} · {{ booking.city }}, {{ booking.state }}</p>
               <p>{{ booking.check_in }}–{{ booking.check_out }} · {{ booking.nights }} nights</p>
-            </div>
-            <div class="booking-price">
-              <strong>{{ formatCurrency(booking.stay_price_usd) }}</strong>
-              <span>Booked {{ booking.booked_on }}</span>
-              <span>{{ booking.booking_id }}</span>
-            </div>
+              <div class="booking-price">
+                <strong>{{ formatCurrency(booking.stay_price_usd) }}</strong>
+                <span>Booked {{ booking.booked_on }}</span>
+              </div>
+              <div class="booking-actions">
+                <button
+                  v-if="booking.status === 'confirmed'"
+                  class="secondary-button"
+                  type="button"
+                  :disabled="mutatingBookingId === booking.booking_id"
+                  @click="cancelBooking(booking.booking_id)"
+                >
+                  Cancel booking
+                </button>
+                <button
+                  class="danger-button"
+                  type="button"
+                  :disabled="mutatingBookingId === booking.booking_id"
+                  @click="removeBooking(booking.booking_id)"
+                >
+                  Delete
+                </button>
+              </div>
+            </article>
+            <p v-if="!bookings.length" class="empty-history">
+              {{
+                selectedUserId
+                  ? 'This traveler has no bookings yet.'
+                  : 'Choose a traveler to view history.'
+              }}
+            </p>
           </div>
-          <div class="booking-actions">
-            <button
-              v-if="booking.status === 'confirmed'"
-              class="secondary-button"
-              type="button"
-              :disabled="mutatingBookingId === booking.booking_id"
-              @click="cancelBooking(booking.booking_id)"
-            >
-              Cancel booking
-            </button>
-            <button
-              class="danger-button"
-              type="button"
-              :disabled="mutatingBookingId === booking.booking_id"
-              @click="removeBooking(booking.booking_id)"
-            >
-              Delete
-            </button>
-          </div>
-        </article>
-
-        <p v-if="!bookings.length" class="empty-history">
-          {{
-            selectedUserId
-              ? 'This traveler has no bookings.'
-              : 'Choose a traveler to view history.'
-          }}
-        </p>
+        </section>
+        <footer class="app-footer">
+          A stay to look forward to. <span aria-hidden="true">✦</span>
+        </footer>
       </div>
-    </section>
+    </div>
   </main>
 </template>

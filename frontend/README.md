@@ -1,44 +1,47 @@
-# frontend
+# Frontend
 
-This template should help get you started developing with Vue 3 in Vite.
+Vue 3 and Vite power the phone layout, styled after the supplied reference with a
+cream background, navy frame, yellow accents, and stacked hotel stay cards.
 
-## Recommended IDE Setup
+## Development
 
-[VS Code](https://code.visualstudio.com/) + [Vue (Official)](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
-
-## Recommended Browser Setup
-
-- Chromium-based browsers (Chrome, Edge, Brave, etc.):
-  - [Vue.js devtools](https://chromewebstore.google.com/detail/vuejs-devtools/nhdogjmejiglipccpnnnanhbledajbpd)
-  - [Turn on Custom Object Formatter in Chrome DevTools](http://bit.ly/object-formatters)
-- Firefox:
-  - [Vue.js devtools](https://addons.mozilla.org/en-US/firefox/addon/vue-js-devtools/)
-  - [Turn on Custom Object Formatter in Firefox DevTools](https://fxdx.dev/firefox-devtools-custom-object-formatters/)
-
-## Customize configuration
-
-See [Vite Configuration Reference](https://vite.dev/config/).
-
-## Project Setup
+Use a Node.js version supported by `package.json`, then run:
 
 ```sh
 npm install
-```
-
-### Compile and Hot-Reload for Development
-
-```sh
 npm run dev
 ```
 
-### Compile and Minify for Production
+Run the existing FastAPI application separately from the repository root:
 
 ```sh
-npm run build
+backend/.venv/bin/python -m uvicorn backend.app:app --reload
 ```
 
-### Lint with [ESLint](https://eslint.org/)
+Vite forwards `/api` requests to `http://127.0.0.1:8000`.
+
+## Functionality and data
+
+The API contracts in `backend/app.py` are the source of truth. The frontend API
+modules in `src/api/` use those existing routes for hotel-name search and booking
+creation, history, cancellation, and deletion. Search results contain fixed trip
+dates; the stay selector chooses among those trips. Price sorting happens locally
+using the stay total, without changing API result order or booking choices.
+
+`src/components/StayCard.vue` contains the image placeholders. They are explicitly
+labeled as placeholders and do not represent real hotel photos. Cards show only
+API-provided hotel, location, trip, date, night, and price information. The reference's
+flights, bundle savings, ratings, and amenities are omitted because the API does
+not provide those fields.
+
+## Checks
 
 ```sh
 npm run lint
+npm run build
+node --test tests/*.test.js
 ```
+
+The price sorting tests use Node's built-in test runner. This JavaScript project
+has no separate configured type checker; the production build compiles the Vue
+components.
