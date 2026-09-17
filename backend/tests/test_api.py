@@ -87,3 +87,38 @@ def test_booking_endpoints_return_domain_errors(client):
     assert duplicate.status_code == 409
     assert missing_user.status_code == 404
     assert missing_booking.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"user_id": "   ", "trip_id": "T001"},
+        {"user_id": "U006", "trip_id": "   "},
+        {"user_id": "U006", "trip_id": "T001", "status": "cancelled"},
+    ],
+)
+def test_booking_create_rejects_invalid_contract_input(client, payload):
+    response = client.post("/api/bookings", json=payload)
+    assert response.status_code == 422
+    assert client.get("/api/bookings", params={"user_id": "U006"}).json() == []
+
+
+def test_booking_create_normalizes_surrounding_id_whitespace(client):
+    response = client.post(
+        "/api/bookings", json={"user_id": " U006 ", "trip_id": " T001 "}
+    )
+    assert response.status_code == 201
+    assert response.json()["user_id"] == "U006"
+    assert response.json()["trip_id"] == "T001"
+
+
+@pytest.mark.parametrize(
+    "payload", [{"status": "unknown"}, {"status": "cancelled", "trip_id": "T002"}]
+)
+def test_booking_status_rejects_invalid_contract_input(client, payload):
+    assert client.patch("/api/bookings/B001", json=payload).status_code == 422
+    history = client.get("/api/bookings", params={"user_id": "U001"}).json()
+    assert (
+        next(item for item in history if item["booking_id"] == "B001")["status"]
+        == "confirmed"
+    )

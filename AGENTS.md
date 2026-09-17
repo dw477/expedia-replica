@@ -26,3 +26,66 @@ These rules apply throughout the repository.
 
 - Explain non-obvious decisions near the code or in the relevant application documentation.
 - Keep commands copy-pasteable and avoid documenting tools that are not actually configured.
+
+## MVC Architecture and Contracts
+
+- Follow Model–View–Controller (MVC). Keep immutable entity definitions, field
+  validation, relationships, and result objects in `backend/models/`. Models must
+  not import controllers, frontend code, HTTP handlers, or database connections.
+- Keep screens, components, interaction state, presentation formatting, and CSS
+  in `frontend/` (the View). The optional text interface is `frontend/cli.py`.
+  The browser communicates with controllers through `frontend/src/api/`; it must
+  never read CSVs, execute SQL, or calculate authoritative prices or booking rules.
+  Display formatting and sorting already returned results are View responsibilities.
+- Keep persistence and business operations in `backend/controllers/`. Only
+  `controllers/database.py` may open SQLite, read seed CSVs, issue SQL, or manage
+  transactions. SQLite DDL lives in `models/schema.py` as the storage contract.
+  Do not put HTML, CSS, table rendering, or presentation formatting in controllers.
+- The CSV-derived models are Hotel (`hotel_id`), User (`user_id`), Trip (`trip_id`),
+  and Booking (`booking_id`). Hotel has many Trips; User and Trip each have many
+  Bookings. `Trip.hotel_id`, `Booking.user_id`, and `Booking.trip_id` must reference
+  existing parents. Preserve text IDs and restrict deletion of referenced parents;
+  never silently cascade or leave orphan records.
+- The Model–Controller input contract uses validated immutable entities, Python
+  `date` objects, `Decimal` dollar amounts with whole cents, and statuses
+  `confirmed`/`cancelled`. Persist money as integer cents and dates as ISO text.
+  Nights and stay totals are derived result properties, never stored duplicates.
+- The database-controller contract is `initialize(data_directory) -> bool`
+  (true only when seeded), `get(Model, id) -> Model`, `list(Model) -> list[Model]`
+  (ID order), `create(entity) -> entity`, `update(entity) -> entity`, and
+  `delete(Model, id) -> None`. Updates take a complete replacement under the same
+  ID; they do not rename IDs. Call initialize before CRUD on a new database.
+  Do not pass SQL, arbitrary table names, or SQLite rows across controller boundaries.
+- Database errors are explicit: `RecordNotFoundError` for missing entities or
+  references, `ReferenceConflictError` for referenced-parent deletion,
+  `RecordConflictError` for uniqueness/constraint conflicts, and `DatabaseError`
+  for storage failures. Entity construction raises `ValueError` for invalid fields.
+  Group workflows in `DatabaseController.transaction()` for atomic writes;
+  `transaction(write=False)` provides a consistent read snapshot. Scope each
+  controller instance to one workflow; do not share it between threads or nest
+  transactions. Re-importing seed CSVs must never overwrite application changes.
+- Put each business responsibility in its own controller. Search owns matching;
+  bookings own creation, cancellation/restoration, and history. Controllers may
+  call one another only through public typed methods and agreed result/error
+  contracts. They must not access another controller's SQL, connection, or internals.
+- The Controller–View JSON source of truth is `backend/models/contracts.py`,
+  exposed by FastAPI's `/openapi.json`. `controllers/http.py` validates requests,
+  serializes result models, and maps missing records to HTTP 404, booking conflicts
+  to 409, invalid requests to 422, and storage failures to 500. Successful booking
+  creation is 201; deletion is 204 with no body. Dates serialize as `YYYY-MM-DD`,
+  money as decimal strings, and collections as arrays (including empty arrays).
+  Creation accepts only `user_id`/`trip_id` (trimmed non-empty strings, at most 64
+  characters); status updates accept only `status`. Other fields are rejected.
+- Search's public contract is `search_available_stays(hotel_name, database_path,
+  data_directory) -> list[HotelAvailability]`, ordered by trip ID with case-insensitive
+  substring matching; blank input returns `[]`, and failures raise `SearchDataError`.
+  Booking methods return `User` or `BookingHistoryEntry` models; history is ordered
+  by booking date and ID descending. They raise `BookingNotFoundError`,
+  `BookingConflictError`, or `BookingDataError`; invalid status arguments raise
+  `ValueError`. At most one confirmed booking is allowed per user/trip pair.
+- Keep `backend/app.py` as the ASGI entry point. Existing `backend/database.py`,
+  `backend/search.py`, and `backend/bookings.py` are compatibility entry points;
+  add new implementation to the model/controller folders instead.
+- Update these rules, API schemas, design documentation, and contract tests together
+  when changing an input/output contract. See `docs/design.md` for fields, CSV
+  analysis, public controller signatures, and HTTP routes.

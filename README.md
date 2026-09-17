@@ -8,8 +8,24 @@ The specific product requirements and technology choices can be documented here 
 
 ## Project Layout
 
-- `frontend/` contains the client application and its tests.
-- `backend/` contains APIs, business logic, persistence, and server-side tests.
+- `frontend/` is the View: Vue screens, components, CSS, API adapters, tests, and
+  the optional plain-text search interface (`cli.py`).
+- `backend/models/` defines Hotel, User, Trip, Booking, immutable result objects,
+  validation, the SQLite schema, and HTTP request/response contracts.
+- `backend/controllers/` contains the database/CRUD controller, search and booking
+  business controllers, and the FastAPI HTTP controller.
+- `backend/app.py` remains the ASGI entry point; original backend module paths
+  remain compatible.
+
+The CSV-derived relationships are Hotel → Trips, User → Bookings, and Trip →
+Bookings. The database controller performs CRUD on all four models, checks parent
+references, restricts deletion of referenced entities, and manages transactions.
+The browser receives validated JSON and keeps presentation in the View.
+
+MVC rules and contracts are recorded in [AGENTS.md](AGENTS.md). See
+[docs/design.md](docs/design.md) for CSV analysis and controller contracts.
+`backend/models/contracts.py` is the JSON schema source of truth, also exposed
+at `/openapi.json` by FastAPI.
 
 ## Setup
 
@@ -35,6 +51,26 @@ use another location. The backend also initializes the database automatically on
 startup. Starter records are imported only once, so later database changes survive
 application restarts.
 
+Start the API from the project root:
+
+```sh
+backend/.venv/bin/python -m uvicorn backend.app:app --reload
+```
+
+For the optional text View, search directly from the project root:
+
+```sh
+backend/.venv/bin/python -m frontend.cli "Harbor Lantern"
+```
+
+The existing `python -m backend.search` interface also remains available.
+
+Run backend tests from the project root:
+
+```sh
+backend/.venv/bin/python -m pytest backend/tests
+```
+
 The frontend sends all searches and booking operations through FastAPI. Available
 booking routes are:
 
@@ -57,6 +93,7 @@ Run the frontend quality checks from `frontend/`:
 ```sh
 npm run lint
 npm run build
+node --test tests/*.test.js
 ```
 
 Do not commit credentials, API keys, or local environment files.
