@@ -1,7 +1,13 @@
 # Frontend
 
-Vue 3 and Vite power the phone layout, styled after the supplied reference with a
-cream background, navy frame, yellow accents, and stacked hotel stay cards.
+Vue 3 and Vite power a responsive desktop website, styled after the supplied
+reference with a cream background, navy typography, yellow accents, and hotel
+stay cards with image placeholders.
+
+Desktop screens show horizontal stay cards beside the booking form. The booking
+form follows the results on tablet and mobile screens. Booking history uses two
+columns on larger screens and one on small screens. Navigation and all booking
+actions remain available at every screen size.
 
 ## Development
 
@@ -42,6 +48,6 @@ npm run build
 node --test tests/*.test.js
 ```
 
-The price sorting tests use Node's built-in test runner. This JavaScript project
+The price sorting and stay card regression tests use Node's built-in test runner. This JavaScript project
 has no separate configured type checker; the production build compiles the Vue
 components.

@@ -31,22 +31,28 @@ function formatDate(value) {
       <div class="placeholder-thumbnails" aria-hidden="true"><span></span><span></span></div>
     </div>
     <div class="stay-details">
-      <h3>{{ stay.hotel_name }}</h3>
-      <p class="stay-location">{{ stay.city }}, {{ stay.state }}</p>
-      <p class="stay-trip">{{ stay.trip_name }}</p>
-      <p class="stay-dates">
-        {{ formatDate(stay.check_in) }}<br />– {{ formatDate(stay.check_out) }}
-      </p>
-      <span class="stay-badge">{{ stay.nights }} night{{ stay.nights === 1 ? '' : 's' }} away</span>
-      <div class="stay-price">
-        <strong>{{ currency.format(Number(stay.stay_price_usd)) }}</strong>
-        <span>stay total</span>
-        <span>{{ currency.format(Number(stay.nightly_rate_usd)) }} per night</span>
+      <div class="stay-copy">
+        <h3>{{ stay.hotel_name }}</h3>
+        <p class="stay-location">{{ stay.city }}, {{ stay.state }}</p>
+        <p class="stay-trip">{{ stay.trip_name }}</p>
+        <p class="stay-dates">
+          {{ formatDate(stay.check_in) }}<br />– {{ formatDate(stay.check_out) }}
+        </p>
+        <span class="stay-badge"
+          >{{ stay.nights }} night{{ stay.nights === 1 ? '' : 's' }} away</span
+        >
       </div>
-      <button class="stay-button" type="button" :aria-pressed="selected" @click="$emit('choose')">
-        {{ selected ? 'Selected' : 'Choose stay' }}
-        <span aria-hidden="true">{{ selected ? '✓' : '→' }}</span>
-      </button>
+      <div class="stay-offer">
+        <div class="stay-price">
+          <strong>{{ currency.format(Number(stay.stay_price_usd)) }}</strong>
+          <span>stay total</span>
+          <span>{{ currency.format(Number(stay.nightly_rate_usd)) }} per night</span>
+        </div>
+        <button class="stay-button" type="button" :aria-pressed="selected" @click="$emit('choose')">
+          {{ selected ? 'Selected' : 'Choose stay' }}
+          <span aria-hidden="true">{{ selected ? '✓' : '→' }}</span>
+        </button>
+      </div>
     </div>
   </article>
 </template>
