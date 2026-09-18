@@ -104,11 +104,42 @@ These rules apply throughout the repository.
   PBKDF2-SHA256 hashes with 600,000 iterations, never plaintext. Sample demo accounts
   are fictional public fixtures; do not add real credentials to the repository.
   `UserAccount` includes these CSV fields; `User` remains the public SQLite identity.
-- Only the database controller may read credential CSVs or persist sessions.
+- Only the database controller may read/write credential CSVs or persist sessions.
   `list_user_accounts(data_directory) -> list[UserAccount]` validates unique usernames
   and user IDs, returns only accounts linked to existing SQLite users, and raises
   `DatabaseError` for parsing/storage failures. Removing a database user disables
   its CSV login. Account reads must not restore deleted identities or reseed data.
+- Account creation accepts exactly username, display name, and password. Trim and
+  case-fold usernames; trim display names and require non-empty text. Preserve
+  existing 3–64 character username rules. New passwords must be 8–256 ASCII
+  letters/digits or `!@$%&?`, with at least one uppercase letter, one digit, and
+  one allowed special character. Do not apply this policy retroactively to login.
+  Keep validation in `models/authentication.py` and request fields in
+  `models/contracts.py`; never echo submitted credentials in validation errors.
+- `AuthenticationController.register(username, display_name, password,
+  previous_token=None) -> (User, raw_session_token)` allocates a `U`-prefixed UUID
+  and signs the new account in. Invalid fields raise `ValueError`; duplicate
+  usernames raise `AccountExistsError`; storage failures raise
+  `AuthenticationDataError`. Usernames remain reserved while present in CSV,
+  including when the corresponding SQLite identity has been deleted.
+- `DatabaseController.register_user_account(account, session, data_directory,
+  previous_session_id=None) -> User` owns its transaction and saves the CSV hash,
+  public identity, and session together. It raises `AccountUsernameConflictError`
+  for duplicate usernames and `DatabaseError` for storage failures. Serialize
+  registrations with a stable file lock and atomic file replacement. A durable
+  recovery journal restores the original CSV after an interrupted uncommitted
+  save; the committed SQLite identity decides recovery. Keep locks, journals,
+  temporary files, and real registered accounts out of Git. Read account files
+  before entering a database transaction; do not nest registration in one.
+- `/api/auth/register` accepts only `{username, display_name, password}`, returns
+  201 with the public identity and the same session cookie as login, and rotates
+  the previous browser session only on success. Duplicate usernames are 409;
+  invalid fields are 422; storage failures are 500. The View offers registration
+  and sign-in forms and immediately loads the new signed-in account's bookings.
+  Place display name before username in registration. Show a small password hint
+  with only the minimum character count and required character types; do not list
+  special characters. Present other entry requirements in clear error messages
+  when validation fails.
 - `AuthenticationController.login(username, password, previous_token=None)` returns
   `(User, raw_session_token)` or raises `InvalidCredentialsError` /
   `AuthenticationDataError`. Username matching trims and case-folds input; CSV names
@@ -137,7 +168,7 @@ These rules apply throughout the repository.
   user returns 403. Pass `owner_user_id` to booking status/deletion controllers so
   they check ownership inside the write transaction; another user's booking is 404.
   Trusted internal booking calls may omit this argument; HTTP handlers must pass it.
-- Every mutating `/api/` request, including login/logout, requires
+- Every mutating `/api/` request, including registration/login/logout, requires
   `X-Requested-With: XMLHttpRequest`. The View's request adapter adds this header
   and uses same-origin cookies. Do not enable cross-origin credentialed CORS
   without revisiting CSRF protection. Invalid credentials or sessions are 401;

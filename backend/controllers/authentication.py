@@ -5,16 +5,19 @@ import re
 import secrets
 import time
 from pathlib import Path
+from uuid import uuid4
 
 from backend.controllers.database import (
     DEFAULT_DATA_DIRECTORY,
     DEFAULT_DATABASE_PATH,
+    AccountUsernameConflictError,
     DatabaseController,
     DatabaseError,
     RecordNotFoundError,
 )
 from backend.controllers.passwords import hash_password, verify_password
 from backend.models import AuthSession, User, UserAccount
+from backend.models.authentication import validate_registration_password
 
 SESSION_LIFETIME_SECONDS = 8 * 60 * 60
 # Unknown usernames take the same password derivation path as known usernames.
@@ -28,6 +31,10 @@ class AuthenticationError(RuntimeError):
 
 class InvalidCredentialsError(AuthenticationError):
     """The username/password pair is invalid."""
+
+
+class AccountExistsError(AuthenticationError):
+    """Registration attempted an existing username."""
 
 
 class AuthenticationRequiredError(AuthenticationError):
@@ -105,18 +112,54 @@ class AuthenticationController:
                 "Authentication is unavailable. Please try again."
             ) from error
 
+    def register(
+        self,
+        username: str,
+        display_name: str,
+        password: str,
+        previous_token: str | None = None,
+    ) -> tuple[User, str]:
+        """Create a uniquely identified account and immediately start its session."""
+        validate_registration_password(password)
+        account = UserAccount(
+            f"U{uuid4().hex.upper()}",
+            display_name.strip(),
+            username.strip().casefold(),
+            hash_password(password),
+        )
+        token = secrets.token_urlsafe(32)
+        identifier = _session_id(token)
+        assert identifier is not None
+        session = AuthSession(
+            identifier,
+            account.user_id,
+            int(time.time()) + SESSION_LIFETIME_SECONDS,
+            _credential_version(account),
+        )
+        try:
+            user = self.database.register_user_account(
+                account, session, self.data_directory, _session_id(previous_token)
+            )
+            return user, token
+        except AccountUsernameConflictError as error:
+            raise AccountExistsError(str(error)) from error
+        except DatabaseError as error:
+            raise AuthenticationDataError(
+                "Account creation is unavailable. Please try again."
+            ) from error
+
     def current_user(self, token: str | None) -> User:
         identifier = _session_id(token)
         if identifier is None:
             raise AuthenticationRequiredError("Sign in to continue.")
         try:
+            accounts = self.database.list_user_accounts(self.data_directory)
             with self.database.transaction(write=False):
                 session = self.database.get(AuthSession, identifier)
                 if session.expires_at <= int(time.time()):
                     raise AuthenticationRequiredError(
                         "Your session expired. Sign in again."
                     )
-                accounts = self.database.list_user_accounts(self.data_directory)
                 account = next(
                     (item for item in accounts if item.user_id == session.user_id), None
                 )

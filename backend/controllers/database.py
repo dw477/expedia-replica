@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import csv
+import fcntl
+import io
+import json
+import logging
 import os
 import sqlite3
+import tempfile
 from contextlib import contextmanager
 from dataclasses import fields
 from datetime import date
@@ -76,22 +82,24 @@ def initialize_database(
             "INSERT INTO app_metadata(key, value) VALUES ('schema_version', '2') "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         )
-        seed_marker = connection.execute(
-            "SELECT value FROM app_metadata WHERE key = 'starter_data_seeded'"
-        ).fetchone()
-        if seed_marker is not None:
-            _check_references(connection)
-            connection.commit()
-            return False
+        with _account_file_lock(Path(data_directory) / "users.csv"):
+            _recover_registration(connection, Path(data_directory) / "users.csv")
+            seed_marker = connection.execute(
+                "SELECT value FROM app_metadata WHERE key = 'starter_data_seeded'"
+            ).fetchone()
+            if seed_marker is not None:
+                _check_references(connection)
+                connection.commit()
+                return False
 
-        _seed_database(connection, Path(data_directory))
-        _check_references(connection)
-        connection.execute(
-            "INSERT INTO app_metadata(key, value) VALUES (?, ?)",
-            ("starter_data_seeded", "1"),
-        )
-        connection.commit()
-        return True
+            _seed_database(connection, Path(data_directory))
+            _check_references(connection)
+            connection.execute(
+                "INSERT INTO app_metadata(key, value) VALUES (?, ?)",
+                ("starter_data_seeded", "1"),
+            )
+            connection.commit()
+            return True
     except (csv.Error, OSError, sqlite3.Error, UnicodeError, ValueError) as error:
         connection.rollback()
         raise DatabaseError(
@@ -199,8 +207,95 @@ def _money_to_cents(row: dict[str, str], field: str, source: str) -> int:
     return int(amount * 100)
 
 
+@contextmanager
+def _account_file_lock(path: Path) -> Iterator[None]:
+    """Lock a stable sidecar inode across atomic replacements and server processes."""
+    with path.with_name(f".{path.name}.lock").open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write(path: Path, content: bytes) -> None:
+    """Publish a complete durable file; temporary files are owner-readable only."""
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent,
+            prefix=f".{path.name.lstrip('.')}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _read_accounts(path: Path) -> list[UserAccount]:
+    accounts = [
+        UserAccount(
+            **{name: _required(row, name, source) for name in USER_ACCOUNT_COLUMNS}
+        )
+        for source, row in _read_csv(path, USER_ACCOUNT_COLUMNS)
+    ]
+    if len({account.username for account in accounts}) != len(accounts):
+        raise ValueError("users.csv contains duplicate usernames")
+    if len({account.user_id for account in accounts}) != len(accounts):
+        raise ValueError("users.csv contains duplicate user IDs")
+    return accounts
+
+
+def _journal_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.registration.json")
+
+
+def _recover_registration(connection: sqlite3.Connection, path: Path) -> None:
+    """SQLite's committed identity decides whether to keep or undo a CSV append.
+
+    This journal bridges two stores without putting credential hashes in SQLite.
+    Call only with the account-file lock held. Recovery never recreates identities.
+    """
+    journal = _journal_path(path)
+    if not journal.exists():
+        return
+    payload = json.loads(journal.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or set(payload) != {"user_id", "original_csv"}:
+        raise ValueError("Invalid account registration journal")
+    if not isinstance(payload["user_id"], str) or not isinstance(
+        payload["original_csv"], str
+    ):
+        raise ValueError("Invalid account registration journal fields")
+    original = base64.b64decode(payload["original_csv"], validate=True)
+    saved = connection.execute(
+        "SELECT 1 FROM users WHERE user_id = ?", (payload["user_id"],)
+    ).fetchone()
+    if saved is None:
+        _atomic_write(path, original)
+    elif payload["user_id"] not in {
+        account.user_id for account in _read_accounts(path)
+    }:
+        raise ValueError("Committed account is missing from users.csv")
+    journal.unlink()
+
+
 class RecordNotFoundError(DatabaseError):
     """A requested entity or referenced parent does not exist."""
+
+
+class AccountUsernameConflictError(DatabaseError):
+    """A username is already reserved in the credential CSV."""
 
 
 class ReferenceConflictError(DatabaseError):
@@ -298,33 +393,124 @@ class DatabaseController:
         self,
         data_directory: str | Path = DEFAULT_DATA_DIRECTORY,
     ) -> list[UserAccount]:
-        """Read credentials from users.csv each time; never mirror passwords into SQLite.
+        """Read/recover CSV credentials before opening a database read transaction.
 
-        Validate unique usernames/IDs and links to existing database users. A deleted
-        database identity disables its CSV account without restoring the identity.
+        File reads must precede long-lived database reads to avoid a reader waiting
+        for a file lock while a registration writer waits to commit its database.
         """
+        if self._active_connection is not None:
+            raise DatabaseError(
+                "Read account files before entering a database transaction"
+            )
+        path = Path(data_directory) / "users.csv"
         try:
-            accounts = [
-                UserAccount(
-                    **{
-                        name: _required(row, name, source)
-                        for name in USER_ACCOUNT_COLUMNS
-                    }
-                )
-                for source, row in _read_csv(
-                    Path(data_directory) / "users.csv", USER_ACCOUNT_COLUMNS
-                )
-            ]
-            if len({account.username for account in accounts}) != len(accounts):
-                raise ValueError("users.csv contains duplicate usernames")
-            if len({account.user_id for account in accounts}) != len(accounts):
-                raise ValueError("users.csv contains duplicate user IDs")
+            with _account_file_lock(path):
+                with self._connection() as connection:
+                    _recover_registration(connection, path)
+                accounts = _read_accounts(path)
             active_ids = {user.user_id for user in self.list(User)}
             return [account for account in accounts if account.user_id in active_ids]
         except (csv.Error, OSError, UnicodeError, ValueError) as error:
             raise DatabaseError(
                 "Could not load user accounts from users.csv"
             ) from error
+
+    def register_user_account(
+        self,
+        account: UserAccount,
+        session: AuthSession,
+        data_directory: str | Path = DEFAULT_DATA_DIRECTORY,
+        previous_session_id: str | None = None,
+    ) -> User:
+        """Create CSV credentials, SQLite identity, and initial session together.
+
+        A file lock protects username/ID uniqueness across processes. A durable
+        journal restores the old CSV if SQL fails or the process stops before SQL
+        commits. The SQL identity is the recovery commit marker. No credentials
+        enter SQLite; only the journal's old CSV snapshot is temporarily retained.
+        This operation owns its transaction; callers must not wrap it in one.
+        """
+        if self._active_connection is not None:
+            raise DatabaseError("Account registration owns its database transaction")
+        if session.user_id != account.user_id:
+            raise ValueError("Registration session must reference the new account")
+        path = Path(data_directory) / "users.csv"
+        user = User(account.user_id, account.display_name)
+        try:
+            with self._connection(write=True) as connection:
+                with _account_file_lock(path):
+                    _recover_registration(connection, path)
+                    accounts = _read_accounts(path)
+                    if account.username in {item.username for item in accounts}:
+                        raise AccountUsernameConflictError(
+                            "That username is already in use."
+                        )
+                    if (
+                        account.user_id in {item.user_id for item in accounts}
+                        or connection.execute(
+                            "SELECT 1 FROM users WHERE user_id = ?", (account.user_id,)
+                        ).fetchone()
+                        is not None
+                    ):
+                        raise RecordConflictError(
+                            "The generated user ID is already in use."
+                        )
+                    original = path.read_bytes()
+                    output = io.StringIO(newline="")
+                    writer = csv.writer(output, lineterminator="\n")
+                    writer.writerow(USER_ACCOUNT_COLUMNS)
+                    writer.writerows(
+                        (
+                            item.user_id,
+                            item.display_name,
+                            item.username,
+                            item.password_hash,
+                        )
+                        for item in [*accounts, account]
+                    )
+                    journal = _journal_path(path)
+                    _atomic_write(
+                        journal,
+                        json.dumps(
+                            {
+                                "user_id": account.user_id,
+                                "original_csv": base64.b64encode(original).decode(
+                                    "ascii"
+                                ),
+                            }
+                        ).encode("utf-8"),
+                    )
+                    try:
+                        connection.execute(
+                            "INSERT INTO users(user_id, display_name) VALUES (?, ?)",
+                            (user.user_id, user.display_name),
+                        )
+                        connection.execute(
+                            "INSERT INTO auth_sessions(session_id, user_id, expires_at, credential_version) VALUES (?, ?, ?, ?)",
+                            _values(session),
+                        )
+                        if previous_session_id is not None:
+                            connection.execute(
+                                "DELETE FROM auth_sessions WHERE session_id = ?",
+                                (previous_session_id,),
+                            )
+                        _atomic_write(path, output.getvalue().encode("utf-8-sig"))
+                        connection.commit()
+                    except BaseException:
+                        connection.rollback()
+                        _recover_registration(connection, path)
+                        raise
+                    try:
+                        journal.unlink()
+                    except OSError:
+                        # The committed account is usable. The next credential read
+                        # or startup finishes this idempotent housekeeping step.
+                        logging.getLogger(__name__).warning(
+                            "Account saved; registration journal cleanup deferred"
+                        )
+            return user
+        except (csv.Error, OSError, UnicodeError, ValueError) as error:
+            raise DatabaseError("Could not save the new account") from error
 
     @contextmanager
     def transaction(self, *, write: bool = True) -> Iterator[DatabaseController]:

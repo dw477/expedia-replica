@@ -1,0 +1,47 @@
+.authentication-section {
+  margin-bottom: 2rem;
+  padding: clamp(1rem, 3vw, 2rem);
+  border: 1px solid #dedde1;
+  border-radius: 1.25rem;
+  background: #fff;
+}
+
+.authentication-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.field {
+  flex: 1 1 13rem;
+  min-width: 0;
+}
+
+input {
+  width: 100%;
+  padding: 0.8rem 1rem;
+  border: 1px solid #dedde1;
+  border-radius: 0.75rem;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+}
+
+@media (max-width: 520px) {
+  .authentication-form .primary-button {
+    width: 100%;
+  }
+}
+
+.auth-switch {
+  margin-top: 1rem;
+}
+
+.password-help {
+  flex-basis: 100%;
+  font-size: 0.875rem;
+  margin: 0;
+  color: #59565e;
+}

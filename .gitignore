@@ -18,3 +18,8 @@ frontend/.eslintcache
 .env.*
 !.env.example
 .DS_Store
+
+# Runtime account-file locks, recovery journals, and atomic-write temporary files
+data/.users.csv.lock
+data/.users.csv.registration.json
+data/.users.csv.*.tmp

@@ -11,7 +11,8 @@ import { searchAvailableStays } from './api/stays.js'
 
 import StayCard from './components/StayCard.vue'
 import SignInForm from './components/SignInForm.vue'
-import { fetchCurrentUser, signIn, signOut } from './api/authentication.js'
+import CreateAccountForm from './components/CreateAccountForm.vue'
+import { createAccount, fetchCurrentUser, signIn, signOut } from './api/authentication.js'
 import { ApiError } from './api/request.js'
 import { sortStays } from './utils/stays.js'
 
@@ -25,6 +26,7 @@ const visibleStays = computed(() => sortStays(stays.value, priceOrder.value))
 
 const currentUser = ref(null)
 const authError = ref('')
+const isCreatingAccount = ref(false)
 const isAuthBusy = ref(true)
 const isSessionChecking = ref(true)
 const selectedTripId = ref('')
@@ -90,6 +92,31 @@ async function submitSignIn({ username, password }) {
   }
 }
 
+async function switchAuthForm(create) {
+  if (isAuthBusy.value) return
+  isCreatingAccount.value = create
+  authError.value = ''
+  await nextTick()
+  document.querySelector(create ? '#display-name' : '#username')?.focus()
+}
+
+async function submitCreateAccount({ username, displayName, password }) {
+  if (isAuthBusy.value) return
+  authError.value = ''
+  isAuthBusy.value = true
+  try {
+    currentUser.value = await createAccount(username, displayName, password)
+    isCreatingAccount.value = false
+    bookingError.value = ''
+    bookingNotice.value = ''
+    await loadBookingHistory()
+  } catch (error) {
+    authError.value = error instanceof Error ? error.message : 'Account creation failed.'
+  } finally {
+    isAuthBusy.value = false
+  }
+}
+
 async function submitSignOut() {
   if (isAuthBusy.value) return
   authError.value = ''
@@ -143,10 +170,10 @@ async function chooseStay(stay) {
     ? `${stay.trip_name} selected. Complete the booking form.`
     : `${stay.trip_name} selected. Sign in to book this stay.`
   await nextTick()
-  const bookingForm = document.querySelector(currentUser.value ? '#booking-form' : '#sign-in-form')
+  const bookingForm = document.querySelector(currentUser.value ? '#booking-form' : isCreatingAccount.value ? '#create-account-form' : '#sign-in-form')
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   bookingForm?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' })
-  document.querySelector(currentUser.value ? '#selected-stay' : '#username')?.focus({ preventScroll: true })
+  document.querySelector(currentUser.value ? '#selected-stay' : isCreatingAccount.value ? '#display-name' : '#username')?.focus({ preventScroll: true })
 }
 
 async function loadBookingHistory() {
@@ -284,12 +311,20 @@ onMounted(restoreSession)
       <p class="intro">A great place to stay. Something to look forward to.</p>
     </header>
 
+    <CreateAccountForm
+      v-if="!currentUser && isCreatingAccount"
+      :busy="isAuthBusy"
+      :error="authError"
+      @create-account="submitCreateAccount"
+      @sign-in="switchAuthForm(false)"
+    />
     <SignInForm
-      v-if="!currentUser"
+      v-else-if="!currentUser"
       :busy="isAuthBusy"
       :checking="isSessionChecking"
       :error="authError"
       @sign-in="submitSignIn"
+      @create-account="switchAuthForm(true)"
     />
     <p v-else-if="authError" class="message-text error-text" role="alert">{{ authError }}</p>
 

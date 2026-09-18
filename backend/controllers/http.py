@@ -5,10 +5,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from backend.controllers.authentication import (
     SESSION_LIFETIME_SECONDS,
+    AccountExistsError,
     AuthenticationController,
     AuthenticationDataError,
     AuthenticationRequiredError,
@@ -38,6 +40,7 @@ from backend.models.contracts import (
     BookingStatusRequest,
     HotelAvailabilityResponse,
     LoginRequest,
+    RegistrationRequest,
     UserResponse,
 )
 
@@ -71,6 +74,19 @@ def create_app(
 
     application = FastAPI(title="Expedia Assignment API", lifespan=lifespan)
 
+    @application.exception_handler(RequestValidationError)
+    async def invalid_request(_: Request, error: RequestValidationError):
+        # Validation errors must never reflect submitted credentials back to clients.
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [
+                    {key: item[key] for key in ("loc", "msg", "type")}
+                    for item in error.errors()
+                ]
+            },
+        )
+
     @application.middleware("http")
     async def protect_mutations(request: Request, call_next):
         # A cross-site browser cannot attach this header without an approved CORS
@@ -102,6 +118,42 @@ def create_app(
     def user_response(user: User) -> UserResponse:
         return UserResponse(user_id=user.user_id, display_name=user.display_name)
 
+    def set_session_cookie(response: Response, token: str) -> None:
+        response.set_cookie(
+            cookie_name,
+            token,
+            max_age=SESSION_LIFETIME_SECONDS,
+            httponly=True,
+            secure=secure,
+            samesite="lax",
+            path="/api",
+        )
+        response.headers["Cache-Control"] = "no-store"
+
+    @application.post(
+        "/api/auth/register",
+        response_model=UserResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def register(
+        request: Request, response: Response, account: RegistrationRequest
+    ) -> UserResponse:
+        try:
+            user, token = authentication().register(
+                account.username,
+                account.display_name,
+                account.password,
+                request.cookies.get(cookie_name),
+            )
+        except AccountExistsError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except AuthenticationDataError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+        set_session_cookie(response, token)
+        return user_response(user)
+
     @application.post("/api/auth/login", response_model=UserResponse)
     def login(
         request: Request, response: Response, credentials: LoginRequest
@@ -116,16 +168,7 @@ def create_app(
             raise HTTPException(status_code=401, detail=str(error)) from error
         except AuthenticationDataError as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
-        response.set_cookie(
-            cookie_name,
-            token,
-            max_age=SESSION_LIFETIME_SECONDS,
-            httponly=True,
-            secure=secure,
-            samesite="lax",
-            path="/api",
-        )
-        response.headers["Cache-Control"] = "no-store"
+        set_session_cookie(response, token)
         return user_response(user)
 
     @application.get("/api/auth/me", response_model=UserResponse)

@@ -5,7 +5,7 @@ These four CSV files contain fictional classroom data for a small travel applica
 | File | One row represents | Rows | Unique ID |
 | --- | --- | --- | --- |
 | `hotels.csv` | One hotel | 8 | `hotel_id` |
-| `users.csv` | One demo traveler | 6 | `user_id` |
+| `users.csv` | One traveler account | 6 starter accounts | `user_id` |
 | `trips.csv` | One offered hotel stay with fixed dates | 12 | `trip_id` |
 | `bookings.csv` | One simulated reservation by a traveler for a trip | 6 | `booking_id` |
 
@@ -65,6 +65,14 @@ Usernames are `traveler1` through `traveler6`, with public assignment passwords
 `TravelDemo1!` through `TravelDemo6!`, respectively. Passwords are stored only as
 random-salted hashes. Do not replace these fixtures with real credentials in Git.
 The original user IDs and display names still connect to existing bookings.
+Registration adds a new row with a unique `U`-prefixed UUID, a display name,
+canonical username, and salted password hash. New passwords require 8–256 ASCII
+letters/digits or `!@$%&?`, with at least one uppercase letter, digit, and allowed
+special character. New accounts are automatically signed in. The database
+controller serializes and recovers account saves across CSV and SQLite; do not
+edit the CSV while registrations are running. Real registered accounts must not
+be committed to Git. Runtime locks, recovery journals, and temporary files are
+ignored.
 
 Credentials are read from this CSV for each sign-in/session check, independently
 of SQLite's one-time starter import. Username/hash changes invalidate existing

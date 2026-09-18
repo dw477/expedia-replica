@@ -70,3 +70,36 @@ test('malformed session responses fail explicitly', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => new Response('not json', { status: 401 }))
   await assert.rejects(requestJson('/api/auth/me'), { status: 401 })
 })
+
+test('account creation sends exactly the agreed fields with cookie and CSRF support', async (t) => {
+  const { createAccount } = await import('../src/api/authentication.js')
+  const calls = mockResponse(t, user, 201)
+  assert.deepEqual(await createAccount('newtraveler', 'New Traveler', 'Abcdef1!'), user)
+  assert.equal(calls[0].url, '/api/auth/register')
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    username: 'newtraveler', display_name: 'New Traveler', password: 'Abcdef1!',
+  })
+  assert.equal(calls[0].options.method, 'POST')
+  assert.equal(calls[0].options.credentials, 'same-origin')
+  assert.equal(calls[0].options.headers.get('X-Requested-With'), 'XMLHttpRequest')
+})
+
+test('registration preserves conflicts and displays validation messages', async (t) => {
+  const { createAccount } = await import('../src/api/authentication.js')
+  mockResponse(t, { detail: 'That username is already in use.' }, 409)
+  await assert.rejects(createAccount('traveler6', 'Traveler', 'Abcdef1!'), { status: 409, message: 'That username is already in use.' })
+  t.mock.restoreAll()
+  mockResponse(t, { detail: [{ loc: ['body', 'password'], msg: 'Value error, Password must include an uppercase letter.' }] }, 422)
+  await assert.rejects(createAccount('newtraveler', 'Traveler', 'abcdef1!'), { status: 422, message: 'Password must include an uppercase letter.' })
+})
+
+test('invalid account entries show clear field messages instead of schema errors', async (t) => {
+  const { createAccount } = await import('../src/api/authentication.js')
+  mockResponse(t, { detail: [{ loc: ['body', 'username'], type: 'string_pattern_mismatch', msg: 'String should match pattern' }] }, 422)
+  await assert.rejects(createAccount('bad name', 'Traveler', 'Abcdef1!'), {
+    status: 422, message: 'Username must be 3–64 letters, digits, dots, underscores, or hyphens and start with a letter or digit.',
+  })
+  t.mock.restoreAll()
+  mockResponse(t, { detail: [{ loc: ['body', 'display_name'], type: 'string_too_short', msg: 'String should have at least 1 character' }] }, 422)
+  await assert.rejects(createAccount('newtraveler', ' ', 'Abcdef1!'), { status: 422, message: 'Enter a display name.' })
+})

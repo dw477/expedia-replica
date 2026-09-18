@@ -131,9 +131,41 @@ and case-folds usernames.
 
 | Operation | Output | Failure contract |
 | --- | --- | --- |
+| `register(username, display_name, password, previous_token=None)` | `(User, raw token)`, automatic sign-in | `ValueError`, `AccountExistsError`, `AuthenticationDataError` |
 | `login(username, password, previous_token=None)` | `(User, raw token)` | `InvalidCredentialsError`, `AuthenticationDataError` |
 | `current_user(token)` | `User` | `AuthenticationRequiredError`, `AuthenticationDataError` |
 | `logout(token)` | `None`, idempotent revocation | `AuthenticationDataError` |
+
+Registration trims/case-folds usernames and trims non-empty display names. New
+passwords must be 8–256 ASCII letters/digits or `!@$%&?`, including at least one
+uppercase letter, digit, and allowed special. There is no lowercase requirement.
+Existing login verification retains its original password policy. The immutable
+model's validator owns the password policy; `RegistrationRequest` owns the exact
+three JSON fields and rejects extras. Validation responses contain location,
+message, and error type, never submitted input.
+
+The authentication controller assigns `U` plus a random UUID's 32 uppercase hex
+digits and hashes the password before calling
+`DatabaseController.register_user_account(account, session, data_directory,
+previous_session_id=None) -> User`. The database controller owns this transaction,
+checks username/ID uniqueness, appends credentials to CSV, inserts the public user
+and first session into SQLite, and revokes the previous session only on success.
+CSV usernames remain reserved even if their SQLite identity is removed. Duplicate
+usernames raise `AccountUsernameConflictError`, mapped by authentication to
+`AccountExistsError`; other uniqueness/storage failures are database errors.
+
+Registrations use SQLite's write lock and a stable POSIX account-file lock
+(`.users.csv.lock`) to serialize writers across processes. CSV publication uses
+owner-readable temporary files, atomic replacement, and fsync. A durable
+`.users.csv.registration.json` journal contains the original CSV bytes and new
+user ID before any mutations. Recovery keeps the new CSV if that identity has
+committed; otherwise it restores the original CSV. Initialization and credential
+reads recover pending saves while holding the file lock. Cleanup after commit is
+idempotent. Credential reads must precede database read transactions; registration
+owns its transaction and cannot be nested. These runtime files and real account
+records must stay out of version control. The deployment needs write access to
+its CSV directory as well as SQLite; the existing fixture columns/schema remain
+unchanged.
 
 Unknown usernames follow a dummy hash-verification path and receive the same
 invalid-credentials error as incorrect passwords. Raw random 256-bit tokens cross
@@ -171,11 +203,13 @@ and error mapping. Route handlers delegate business operations to controllers.
 | `POST /api/bookings` | Valid session, `{trip_id}`; optional matching `user_id` | 201, booking result |
 | `PATCH /api/bookings/{booking_id}` | Valid session, own booking, `{status}` | 200, booking result |
 | `DELETE /api/bookings/{booking_id}` | Valid session, own booking ID | 204, no body |
+| `POST /api/auth/register` | `{username, display_name, password}` | 201, public user identity plus session cookie |
 | `POST /api/auth/login` | `{username, password}` | 200, public user identity plus session cookie |
 | `GET /api/auth/me` | Valid session | 200, public user identity |
 | `POST /api/auth/logout` | Optional session | 204, revoked session and cleared cookie |
 
-Login's response and `/api/auth/me` expose only `user_id` and `display_name`.
+Registration/login responses and `/api/auth/me` expose only `user_id` and `display_name`.
+Duplicate registration usernames are 409; invalid registration fields are 422.
 Invalid credentials and missing/expired sessions are 401; storage failures are
 500. Cookie attributes are HTTP-only, host-only, SameSite=Lax, `/api` path, and
 secure when `EXPEDIA_SECURE_COOKIES=true`. HTTPS deployments require that setting;

@@ -6,7 +6,7 @@ defineProps({
   checking: Boolean,
   error: { type: String, default: '' },
 })
-const emit = defineEmits(['sign-in'])
+const emit = defineEmits(['sign-in', 'create-account'])
 const username = ref('')
 const password = ref('')
 
@@ -61,44 +61,8 @@ function submit() {
       </button>
     </form>
     <p v-if="error" id="auth-error" class="message-text error-text" role="alert">{{ error }}</p>
+    <button class="secondary-button auth-switch" type="button" :disabled="busy" @click="emit('create-account')">Create an account</button>
   </section>
 </template>
 
-<style scoped>
-.authentication-section {
-  margin-bottom: 2rem;
-  padding: clamp(1rem, 3vw, 2rem);
-  border: 1px solid #dedde1;
-  border-radius: 1.25rem;
-  background: #fff;
-}
-
-.authentication-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 1rem;
-  margin-top: 1.25rem;
-}
-
-.field {
-  flex: 1 1 13rem;
-  min-width: 0;
-}
-
-input {
-  width: 100%;
-  padding: 0.8rem 1rem;
-  border: 1px solid #dedde1;
-  border-radius: 0.75rem;
-  background: #fff;
-  color: inherit;
-  font: inherit;
-}
-
-@media (max-width: 520px) {
-  .authentication-form .primary-button {
-    width: 100%;
-  }
-}
-</style>
+<style scoped src="../assets/authentication.css"></style>

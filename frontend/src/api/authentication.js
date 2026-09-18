@@ -2,7 +2,7 @@ import { ApiError, requestJson } from './request.js'
 
 function requireUser(user) {
   if (!user || typeof user.user_id !== 'string' || typeof user.display_name !== 'string') {
-    throw new Error('Sign-in returned an unexpected response.')
+    throw new Error('Authentication returned an unexpected response.')
   }
   return user
 }
@@ -28,4 +28,12 @@ export async function fetchCurrentUser() {
 
 export function signOut() {
   return requestJson('/api/auth/logout', { method: 'POST' })
+}
+
+export async function createAccount(username, displayName, password) {
+  return requireUser(await requestJson('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, display_name: displayName, password }),
+  }))
 }

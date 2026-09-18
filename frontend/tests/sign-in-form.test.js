@@ -40,7 +40,7 @@ test('session checking disables inputs and communicates progress', async () => {
   const html = await renderForm({ busy: true, checking: true })
   assert.match(html, /aria-busy="true"/)
   assert.match(html, /Checking session…/)
-  assert.equal((html.match(/ disabled/g) ?? []).length, 3)
+  assert.equal((html.match(/ disabled/g) ?? []).length, 4)
 })
 
 test('signed-out View requires sign-in for booking and removes the traveler picker', async () => {
@@ -49,4 +49,36 @@ test('signed-out View requires sign-in for booking and removes the traveler pick
   assert.match(html, /Sign in to view your bookings/)
   assert.doesNotMatch(html, /id="traveler"/)
   assert.doesNotMatch(html, /Create booking/)
+})
+
+const { default: CreateAccountForm } = await server.ssrLoadModule('/src/components/CreateAccountForm.vue')
+
+test('registration exposes only the three agreed fields and explains password rules', async () => {
+  const html = await renderToString(createSSRApp(CreateAccountForm))
+  assert.match(html, /for="username"/)
+  assert.match(html, /for="display-name"/)
+  assert.match(html, /for="password"/)
+  assert.match(html, /autocomplete="new-password"/)
+  assert.match(html, /minlength="8"/)
+  assert.match(html, /At least 8 characters, including an uppercase letter, a digit, and a special character\./)
+  assert.doesNotMatch(html, /8–256 characters|!@\$%/)
+  assert.ok(html.indexOf('for="display-name"') < html.indexOf('for="username"'))
+  assert.doesNotMatch(html, /Username:|username-help|Capitalization is ignored/)
+  assert.equal((html.match(/<input /g) ?? []).length, 3)
+  assert.equal((html.match(/ required/g) ?? []).length, 3)
+  assert.doesNotMatch(html, /type="email"|Confirm password/)
+})
+
+test('registration announces errors, preserves help associations, and disables busy actions', async () => {
+  const html = await renderToString(createSSRApp(CreateAccountForm, { busy: true, error: 'That username is already in use.' }))
+  assert.match(html, /role="alert"/)
+  assert.match(html, /aria-describedby="password-help auth-error"/)
+  assert.match(html, /aria-describedby="auth-error"/)
+  assert.match(html, /That username is already in use\./)
+  assert.match(html, /Creating account…/)
+  assert.equal((html.match(/ disabled/g) ?? []).length, 5)
+})
+
+test('sign-in offers account creation', async () => {
+  assert.match(await renderForm(), /Create an account/)
 })

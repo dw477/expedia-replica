@@ -3,8 +3,12 @@
 from datetime import date
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from backend.models.authentication import (
+    USERNAME_PATTERN,
+    validate_registration_password,
+)
 from backend.models.entities import BookingStatus
 
 
@@ -65,3 +69,26 @@ class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     # Passwords must not be stripped or case-folded.
     password: str = Field(min_length=1, max_length=256, repr=False)
+
+
+class RegistrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=3, max_length=64, pattern=f"^{USERNAME_PATTERN}$")
+    display_name: str = Field(min_length=1)
+    password: str = Field(min_length=8, max_length=256, repr=False)
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def normalize_username(cls, value: object) -> object:
+        return value.strip().casefold() if isinstance(value, str) else value
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def trim_display_name(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return validate_registration_password(value)

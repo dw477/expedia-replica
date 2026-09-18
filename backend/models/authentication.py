@@ -5,6 +5,21 @@ from dataclasses import dataclass, field
 
 USERNAME_PATTERN = r"[a-z0-9][a-z0-9_.-]{2,63}"
 PASSWORD_HASH_PATTERN = r"pbkdf2_sha256\$600000\$[0-9a-f]{32}\$[0-9a-f]{64}"
+REGISTRATION_PASSWORD_PATTERN = (
+    r"(?=.*[A-Z])(?=.*[0-9])(?=.*[!@$%&?])[A-Za-z0-9!@$%&?]{8,256}"
+)
+
+
+def validate_registration_password(password: str) -> str:
+    """New passwords use only letters, digits, and the agreed special characters."""
+    if re.fullmatch(REGISTRATION_PASSWORD_PATTERN, password) is None:
+        raise ValueError(
+            "Password must be 8–256 characters and include an uppercase letter, a digit, "
+            "and one of !@$%&?. Only letters, digits, and those special characters are allowed."
+        )
+    return password
+
+
 USER_ACCOUNT_COLUMNS = ("user_id", "display_name", "username", "password_hash")
 
 

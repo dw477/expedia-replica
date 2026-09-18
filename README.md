@@ -108,10 +108,22 @@ backend/.venv/bin/python -m frontend.hash_password
 Paste the resulting hash into that user's `password_hash` column. Usernames in the
 CSV must be unique lowercase names of 3–64 characters (letters, digits, `.`, `_`,
 `-`). Sign-in trims/case-folds usernames; passwords preserve case and whitespace.
-There is no public registration flow.
+Select **Create an account** in the sign-in panel. Registration asks for username,
+display name, and password, assigns a unique `U`-prefixed UUID, and signs you in
+automatically. Passwords must be 8–256 characters, contain at least one uppercase
+letter, one digit, and one of `!@$%&?`, and use only ASCII letters, digits, and those
+special characters. Display names must be non-empty. Usernames use the existing
+rules above and are checked without case sensitivity.
+
+Account creation saves the salted hash in `users.csv` and the public identity and
+session in SQLite. Duplicate usernames return a clear error. File locking and a
+recovery journal protect interrupted saves; the backend needs write access to the
+data directory. Keep real registered accounts out of Git; commit only the supplied
+fictional demo fixtures. Lock/journal/temporary files are ignored.
 
 Authentication endpoints are:
 
+- `POST /api/auth/register` with `{ "username": "newtraveler", "display_name": "New Traveler", "password": "Abcdef1!" }` (201; duplicate username 409, invalid fields 422)
 - `POST /api/auth/login` with `{ "username": "traveler6", "password": "TravelDemo6!" }`
 - `GET /api/auth/me` to restore the signed-in account
 - `POST /api/auth/logout` to revoke the session and clear its cookie
