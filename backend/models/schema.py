@@ -45,6 +45,16 @@ SCHEMA_STATEMENTS = (
         status TEXT NOT NULL CHECK (status IN ('confirmed', 'cancelled'))
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+        session_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(user_id),
+        expires_at INTEGER NOT NULL CHECK (expires_at >= 0),
+        credential_version TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at)",
     "CREATE INDEX IF NOT EXISTS idx_hotels_name ON hotels(hotel_name)",
     "CREATE INDEX IF NOT EXISTS idx_trips_hotel_id ON trips(hotel_id)",
     "CREATE INDEX IF NOT EXISTS idx_bookings_user_id ON bookings(user_id)",

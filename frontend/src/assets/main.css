@@ -78,6 +78,8 @@ svg {
 }
 .site-nav {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 32px;
   font-size: 14px;
@@ -792,6 +794,8 @@ select:disabled {
     width: calc(100% - 32px);
   }
   .header-inner {
+    flex-wrap: wrap;
+    padding: 12px 0;
     min-height: 74px;
     gap: 12px;
   }
@@ -959,5 +963,23 @@ select:disabled {
   *::before,
   *::after {
     scroll-behavior: auto !important;
+  }
+}
+
+.account-name {
+  max-width: 15rem;
+  overflow-wrap: anywhere;
+}
+
+.booking-traveler {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+@media (max-width: 700px) {
+  .site-nav {
+    width: 100%;
+    justify-content: space-between;
   }
 }

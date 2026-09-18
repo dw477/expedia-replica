@@ -31,7 +31,7 @@ class UserResponse(BaseModel):
 class BookingCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    user_id: str = Field(min_length=1, max_length=64)
+    user_id: str | None = Field(default=None, min_length=1, max_length=64)
     trip_id: str = Field(min_length=1, max_length=64)
 
 
@@ -57,3 +57,11 @@ class BookingResponse(BaseModel):
     stay_price_usd: Decimal
     booked_on: date
     status: BookingStatus
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=64)
+    # Passwords must not be stripped or case-folded.
+    password: str = Field(min_length=1, max_length=256, repr=False)

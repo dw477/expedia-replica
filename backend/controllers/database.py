@@ -12,7 +12,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterator, TypeVar
 
-from backend.models import Booking, Hotel, Trip, User
+from backend.models import AuthSession, Booking, Hotel, Trip, User, UserAccount
+from backend.models.authentication import USER_ACCOUNT_COLUMNS
 from backend.models.entities import validate_nightly_rate
 from backend.models.schema import SCHEMA_STATEMENTS
 
@@ -71,6 +72,10 @@ def initialize_database(
         for statement in SCHEMA_STATEMENTS:
             connection.execute(statement)
 
+        connection.execute(
+            "INSERT INTO app_metadata(key, value) VALUES ('schema_version', '2') "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
         seed_marker = connection.execute(
             "SELECT value FROM app_metadata WHERE key = 'starter_data_seeded'"
         ).fetchone()
@@ -84,10 +89,6 @@ def initialize_database(
         connection.execute(
             "INSERT INTO app_metadata(key, value) VALUES (?, ?)",
             ("starter_data_seeded", "1"),
-        )
-        connection.execute(
-            "INSERT INTO app_metadata(key, value) VALUES (?, ?)",
-            ("schema_version", "1"),
         )
         connection.commit()
         return True
@@ -109,7 +110,7 @@ def _seed_database(connection: sqlite3.Connection, data_directory: Path) -> None
             "hotels.csv",
             ("hotel_id", "hotel_name", "city", "state", "nightly_rate_usd"),
         ),
-        (User, "users.csv", ("user_id", "display_name")),
+        (User, "users.csv", USER_ACCOUNT_COLUMNS),
         (
             Trip,
             "trips.csv",
@@ -121,6 +122,7 @@ def _seed_database(connection: sqlite3.Connection, data_directory: Path) -> None
             ("booking_id", "user_id", "trip_id", "booked_on", "status"),
         ),
     )
+    account_usernames: set[str] = set()
     # Parents are imported before children. Every CSV row uses the same entity
     # validation as CRUD, with source/row context added to parsing failures.
     for model, filename, names in sources:
@@ -129,6 +131,15 @@ def _seed_database(connection: sqlite3.Connection, data_directory: Path) -> None
             values: dict[str, Any] = {
                 name: _required(row, name, source) for name in names
             }
+            if model is User:
+                account = UserAccount(**values)
+                if account.username in account_usernames:
+                    raise ValueError(f"{source} has duplicate username")
+                account_usernames.add(account.username)
+                values = {
+                    "user_id": account.user_id,
+                    "display_name": account.display_name,
+                }
             if model is Hotel:
                 values["nightly_rate_usd"] = (
                     Decimal(_money_to_cents(row, "nightly_rate_usd", source)) / 100
@@ -202,17 +213,19 @@ class RecordConflictError(DatabaseError):
 
 # These identifiers are internal constants. Never accept table/column names from
 # callers; SQL values are always parameterized.
-Entity = TypeVar("Entity", bound=Hotel | User | Trip | Booking)
+Entity = TypeVar("Entity", bound=Hotel | User | Trip | Booking | AuthSession)
 ENTITY_TABLES: dict[type, str] = {
     Hotel: "hotels",
     User: "users",
     Trip: "trips",
     Booking: "bookings",
+    AuthSession: "auth_sessions",
 }
 ENTITY_REFERENCES: dict[
     type,
-    tuple[tuple[str, type[Hotel | User | Trip | Booking]], ...],
+    tuple[tuple[str, type[Hotel | User | Trip | Booking | AuthSession]], ...],
 ] = {
+    AuthSession: (("user_id", User),),
     Trip: (("hotel_id", Hotel),),
     Booking: (("user_id", User), ("trip_id", Trip)),
 }
@@ -270,6 +283,48 @@ class DatabaseController:
 
     def initialize(self, data_directory: str | Path = DEFAULT_DATA_DIRECTORY) -> bool:
         return initialize_database(self.database_path, data_directory)
+
+    def delete_expired_sessions(self, now: int) -> int:
+        """Prune expired authentication rows; return the number removed."""
+        if type(now) is not int or now < 0:
+            raise ValueError("now must be a non-negative Unix timestamp")
+        with self._connection(write=True) as connection:
+            result = connection.execute(
+                "DELETE FROM auth_sessions WHERE expires_at <= ?", (now,)
+            )
+            return result.rowcount
+
+    def list_user_accounts(
+        self,
+        data_directory: str | Path = DEFAULT_DATA_DIRECTORY,
+    ) -> list[UserAccount]:
+        """Read credentials from users.csv each time; never mirror passwords into SQLite.
+
+        Validate unique usernames/IDs and links to existing database users. A deleted
+        database identity disables its CSV account without restoring the identity.
+        """
+        try:
+            accounts = [
+                UserAccount(
+                    **{
+                        name: _required(row, name, source)
+                        for name in USER_ACCOUNT_COLUMNS
+                    }
+                )
+                for source, row in _read_csv(
+                    Path(data_directory) / "users.csv", USER_ACCOUNT_COLUMNS
+                )
+            ]
+            if len({account.username for account in accounts}) != len(accounts):
+                raise ValueError("users.csv contains duplicate usernames")
+            if len({account.user_id for account in accounts}) != len(accounts):
+                raise ValueError("users.csv contains duplicate user IDs")
+            active_ids = {user.user_id for user in self.list(User)}
+            return [account for account in accounts if account.user_id in active_ids]
+        except (csv.Error, OSError, UnicodeError, ValueError) as error:
+            raise DatabaseError(
+                "Could not load user accounts from users.csv"
+            ) from error
 
     @contextmanager
     def transaction(self, *, write: bool = True) -> Iterator[DatabaseController]:

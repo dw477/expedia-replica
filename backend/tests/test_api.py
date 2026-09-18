@@ -7,6 +7,14 @@ from backend.app import create_app
 @pytest.fixture
 def client(tmp_path):
     with TestClient(create_app(tmp_path / "expedia.sqlite3")) as test_client:
+        test_client.headers.update({"X-Requested-With": "XMLHttpRequest"})
+        assert (
+            test_client.post(
+                "/api/auth/login",
+                json={"username": "traveler6", "password": "TravelDemo6!"},
+            ).status_code
+            == 200
+        )
         yield test_client
 
 
@@ -78,6 +86,13 @@ def test_booking_crud_flow(client):
 
 
 def test_booking_endpoints_return_domain_errors(client):
+    assert (
+        client.post(
+            "/api/auth/login",
+            json={"username": "traveler1", "password": "TravelDemo1!"},
+        ).status_code
+        == 200
+    )
     duplicate = client.post(
         "/api/bookings", json={"user_id": "U001", "trip_id": "T001"}
     )
@@ -85,7 +100,7 @@ def test_booking_endpoints_return_domain_errors(client):
     missing_booking = client.delete("/api/bookings/missing")
 
     assert duplicate.status_code == 409
-    assert missing_user.status_code == 404
+    assert missing_user.status_code == 403
     assert missing_booking.status_code == 404
 
 
@@ -116,6 +131,13 @@ def test_booking_create_normalizes_surrounding_id_whitespace(client):
     "payload", [{"status": "unknown"}, {"status": "cancelled", "trip_id": "T002"}]
 )
 def test_booking_status_rejects_invalid_contract_input(client, payload):
+    assert (
+        client.post(
+            "/api/auth/login",
+            json={"username": "traveler1", "password": "TravelDemo1!"},
+        ).status_code
+        == 200
+    )
     assert client.patch("/api/bookings/B001", json=payload).status_code == 422
     history = client.get("/api/bookings", params={"user_id": "U001"}).json()
     assert (

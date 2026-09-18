@@ -13,7 +13,8 @@ These four CSV files contain fictional classroom data for a small travel applica
 
 For Part 1, the Python backend reads the supplied CSV files. The Vue frontend sends a search request through the FastAPI routes, and displays matching trips in a plain table. Hotel and trip information are connected by `hotel_id`. The sample users and bookings support the later booking and history work.
 
-In this simplified model, a **trip is a hotel stay**. Each trip names one hotel and a check-in/check-out date. Flights, room inventory, authentication, payments, taxes, and fees are outside the data model. Each trip has a fixed nightly price from its hotel. The same hotel may appear in several trips with different dates.
+In this simplified model, a **trip is a hotel stay**. Each trip names one hotel and a check-in/check-out date. Flights, room inventory, payments, taxes, and fees are outside the travel data model. The application now
+uses username/password-hash fields in the users CSV for sign-in. Each trip has a fixed nightly price from its hotel. The same hotel may appear in several trips with different dates.
 
 For Part 2, these CSVs become the initial records in SQLite. Changes made in the application should be stored in the database. Restarting the application should preserve those changes. Re-importing the starter files on every startup must not erase new bookings, restore deleted bookings, or duplicate the sample records.
 
@@ -56,8 +57,28 @@ Each booking has two references: a traveler ID and a trip ID. They connect the t
 | --- | --- | --- |
 | `user_id` | Unique text ID for the demo traveler | `U001` |
 | `display_name` | Fictional label shown in the application | Demo Traveler 1 |
+| `username` | Unique lowercase sign-in name | `traveler1` |
+| `password_hash` | Salted PBKDF2-SHA256 password data, 600,000 iterations | `pbkdf2_sha256$600000$...` |
 
-These are demonstration identities, not login accounts. No passwords or personal contact details are provided.
+These are fictional demo login accounts, without personal contact details.
+Usernames are `traveler1` through `traveler6`, with public assignment passwords
+`TravelDemo1!` through `TravelDemo6!`, respectively. Passwords are stored only as
+random-salted hashes. Do not replace these fixtures with real credentials in Git.
+The original user IDs and display names still connect to existing bookings.
+
+Credentials are read from this CSV for each sign-in/session check, independently
+of SQLite's one-time starter import. Username/hash changes invalidate existing
+sessions. Usernames must be unique canonical lowercase 3–64 character names using
+letters, digits, dots, underscores, and hyphens; input username matching ignores
+case and surrounding whitespace. Password matching preserves both. To generate a
+replacement hash securely in the project environment:
+
+```sh
+backend/.venv/bin/python -m frontend.hash_password
+```
+
+Paste the generated hash into `password_hash`; never put readable passwords in
+that column. See the root README for the sign-in endpoints and session behavior.
 
 ### `trips.csv`
 

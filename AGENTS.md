@@ -33,7 +33,8 @@ These rules apply throughout the repository.
   validation, relationships, and result objects in `backend/models/`. Models must
   not import controllers, frontend code, HTTP handlers, or database connections.
 - Keep screens, components, interaction state, presentation formatting, and CSS
-  in `frontend/` (the View). The optional text interface is `frontend/cli.py`.
+  in `frontend/` (the View). Text interfaces live in `frontend/cli.py` and
+  `frontend/hash_password.py`.
   The browser communicates with controllers through `frontend/src/api/`; it must
   never read CSVs, execute SQL, or calculate authoritative prices or booking rules.
   Display formatting and sorting already returned results are View responsibilities.
@@ -74,8 +75,10 @@ These rules apply throughout the repository.
   to 409, invalid requests to 422, and storage failures to 500. Successful booking
   creation is 201; deletion is 204 with no body. Dates serialize as `YYYY-MM-DD`,
   money as decimal strings, and collections as arrays (including empty arrays).
-  Creation accepts only `user_id`/`trip_id` (trimmed non-empty strings, at most 64
-  characters); status updates accept only `status`. Other fields are rejected.
+  Booking creation requires `trip_id` and accepts an optional legacy `user_id`
+  (trimmed non-empty strings, at most 64 characters). Derive the owner from the
+  authenticated session and reject a supplied different user ID. Status updates
+  accept only `status`; unknown fields are rejected.
 - Search's public contract is `search_available_stays(hotel_name, database_path,
   data_directory) -> list[HotelAvailability]`, ordered by trip ID with case-insensitive
   substring matching; blank input returns `[]`, and failures raise `SearchDataError`.
@@ -89,3 +92,55 @@ These rules apply throughout the repository.
 - Update these rules, API schemas, design documentation, and contract tests together
   when changing an input/output contract. See `docs/design.md` for fields, CSV
   analysis, public controller signatures, and HTTP routes.
+
+## Authentication Contracts
+
+- Keep username/password verification and session rules in
+  `backend/controllers/authentication.py`, password hashing/verification in
+  `controllers/passwords.py`, and credential/session objects in
+  `backend/models/authentication.py`. Keep forms, loading/errors, and CSS in the View.
+- `data/users.csv` is the username/password-data source of truth. Its exact columns
+  are `user_id,display_name,username,password_hash`. Store random-salted
+  PBKDF2-SHA256 hashes with 600,000 iterations, never plaintext. Sample demo accounts
+  are fictional public fixtures; do not add real credentials to the repository.
+  `UserAccount` includes these CSV fields; `User` remains the public SQLite identity.
+- Only the database controller may read credential CSVs or persist sessions.
+  `list_user_accounts(data_directory) -> list[UserAccount]` validates unique usernames
+  and user IDs, returns only accounts linked to existing SQLite users, and raises
+  `DatabaseError` for parsing/storage failures. Removing a database user disables
+  its CSV login. Account reads must not restore deleted identities or reseed data.
+- `AuthenticationController.login(username, password, previous_token=None)` returns
+  `(User, raw_session_token)` or raises `InvalidCredentialsError` /
+  `AuthenticationDataError`. Username matching trims and case-folds input; CSV names
+  are canonical lowercase 3–64 character names. Password input is 1–256 characters
+  and preserves case/whitespace. Use constant-time digest comparison and perform
+  a dummy password derivation for unknown usernames.
+- `current_user(token) -> User` raises `AuthenticationRequiredError` for absent,
+  forged, expired, revoked, or disabled sessions; storage errors raise
+  `AuthenticationDataError`. `logout(token) -> None` revokes a session and is
+  idempotent. Scope authentication-controller instances to individual workflows.
+- `AuthSession` is an internal model with `session_id` (SHA256 token digest),
+  `user_id` (foreign key), `expires_at` (Unix seconds), and `credential_version`
+  (digest of the CSV username/hash). Persist only digests, never raw session tokens.
+  Sessions expire after eight hours; login rotates/revokes the previous browser
+  token and prunes expired records via `delete_expired_sessions(now) -> int`.
+  CSV credential changes invalidate existing sessions on their next request.
+- `/api/auth/login` accepts only `{username, password}` and returns the public
+  `{user_id, display_name}` with an HTTP-only, host-only, SameSite=Lax `/api` cookie.
+  `/api/auth/me` returns that same public schema; `/api/auth/logout` returns 204
+  and clears the cookie. Never expose password hashes, session digests, or raw
+  tokens in response bodies, logs, URLs, or frontend storage. Private responses
+  must use `Cache-Control: no-store`. Use secure cookies for HTTPS deployments.
+- Keep hotel searches public. Require a valid session on `/api/users` and every
+  booking route. `/api/users` returns only the signed-in user's identity; history
+  defaults to that account. Access to another user's history or creation as another
+  user returns 403. Pass `owner_user_id` to booking status/deletion controllers so
+  they check ownership inside the write transaction; another user's booking is 404.
+  Trusted internal booking calls may omit this argument; HTTP handlers must pass it.
+- Every mutating `/api/` request, including login/logout, requires
+  `X-Requested-With: XMLHttpRequest`. The View's request adapter adds this header
+  and uses same-origin cookies. Do not enable cross-origin credentialed CORS
+  without revisiting CSRF protection. Invalid credentials or sessions are 401;
+  credential/session storage failures are 500; missing CSRF headers are 403.
+- The View must clear private booking data on sign-out or session expiry and restore
+  the current session on page load. It must not let users choose a different owner.

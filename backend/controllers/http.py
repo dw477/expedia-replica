@@ -1,10 +1,19 @@
 """FastAPI boundary for SQLite-backed hotel availability search."""
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 
+from backend.controllers.authentication import (
+    SESSION_LIFETIME_SECONDS,
+    AuthenticationController,
+    AuthenticationDataError,
+    AuthenticationRequiredError,
+    InvalidCredentialsError,
+)
 from backend.controllers.bookings import (
     BookingConflictError,
     BookingDataError,
@@ -13,7 +22,6 @@ from backend.controllers.bookings import (
     create_booking,
     delete_booking,
     list_booking_history,
-    list_users,
     update_booking_status,
 )
 from backend.controllers.database import (
@@ -23,11 +31,13 @@ from backend.controllers.database import (
     DatabaseError,
 )
 from backend.controllers.search import SearchDataError, search_available_stays
+from backend.models import User
 from backend.models.contracts import (
     BookingCreateRequest,
     BookingResponse,
     BookingStatusRequest,
     HotelAvailabilityResponse,
+    LoginRequest,
     UserResponse,
 )
 
@@ -35,8 +45,21 @@ from backend.models.contracts import (
 def create_app(
     database_path: str | Path = DEFAULT_DATABASE_PATH,
     data_directory: str | Path = DEFAULT_DATA_DIRECTORY,
+    *,
+    cookie_secure: bool | None = None,
 ) -> FastAPI:
     """Create an API configured for a specific database and seed directory."""
+
+    secure = (
+        cookie_secure
+        if cookie_secure is not None
+        else os.environ.get("EXPEDIA_SECURE_COOKIES", "false").lower()
+        in {"1", "true", "yes"}
+    )
+    cookie_name = "expedia_session"
+
+    def authentication() -> AuthenticationController:
+        return AuthenticationController(database_path, data_directory)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -47,6 +70,83 @@ def create_app(
         yield
 
     application = FastAPI(title="Expedia Assignment API", lifespan=lifespan)
+
+    @application.middleware("http")
+    async def protect_mutations(request: Request, call_next):
+        # A cross-site browser cannot attach this header without an approved CORS
+        # preflight. The app intentionally serves the View and API on one origin.
+        if request.url.path.startswith("/api/") and request.method not in {
+            "GET",
+            "HEAD",
+            "OPTIONS",
+        }:
+            if request.headers.get("X-Requested-With") != "XMLHttpRequest":
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "A same-origin request is required."},
+                    headers={"Cache-Control": "no-store"},
+                )
+        response = await call_next(request)
+        if request.url.path.startswith(("/api/auth/", "/api/bookings", "/api/users")):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    def require_user(request: Request) -> User:
+        try:
+            return authentication().current_user(request.cookies.get(cookie_name))
+        except AuthenticationRequiredError as error:
+            raise HTTPException(status_code=401, detail=str(error)) from error
+        except AuthenticationDataError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+
+    def user_response(user: User) -> UserResponse:
+        return UserResponse(user_id=user.user_id, display_name=user.display_name)
+
+    @application.post("/api/auth/login", response_model=UserResponse)
+    def login(
+        request: Request, response: Response, credentials: LoginRequest
+    ) -> UserResponse:
+        try:
+            user, token = authentication().login(
+                credentials.username,
+                credentials.password,
+                request.cookies.get(cookie_name),
+            )
+        except InvalidCredentialsError as error:
+            raise HTTPException(status_code=401, detail=str(error)) from error
+        except AuthenticationDataError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+        response.set_cookie(
+            cookie_name,
+            token,
+            max_age=SESSION_LIFETIME_SECONDS,
+            httponly=True,
+            secure=secure,
+            samesite="lax",
+            path="/api",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return user_response(user)
+
+    @application.get("/api/auth/me", response_model=UserResponse)
+    def current_user(
+        response: Response, user: User = Depends(require_user)
+    ) -> UserResponse:
+        response.headers["Cache-Control"] = "no-store"
+        return user_response(user)
+
+    @application.post("/api/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+    def logout(request: Request) -> Response:
+        try:
+            authentication().logout(request.cookies.get(cookie_name))
+        except AuthenticationDataError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+        response = Response(status_code=status.HTTP_204_NO_CONTENT)
+        response.delete_cookie(
+            cookie_name, path="/api", secure=secure, httponly=True, samesite="lax"
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @application.get("/api/stays", response_model=list[HotelAvailabilityResponse])
     def get_available_stays(
@@ -80,24 +180,21 @@ def create_app(
         ]
 
     @application.get("/api/users", response_model=list[UserResponse])
-    def get_users() -> list[UserResponse]:
-        try:
-            users = list_users(database_path)
-        except BookingDataError as error:
-            raise HTTPException(status_code=500, detail=str(error)) from error
-        return [
-            UserResponse(user_id=user.user_id, display_name=user.display_name)
-            for user in users
-        ]
+    def get_users(user: User = Depends(require_user)) -> list[UserResponse]:
+        """Compatibility route: expose only the signed-in user's public identity."""
+        return [user_response(user)]
 
     @application.get("/api/bookings", response_model=list[BookingResponse])
     def get_booking_history(
-        user_id: str = Query(
-            min_length=1, description="Traveler whose history to load"
-        ),
+        user_id: str | None = Query(default=None, min_length=1, max_length=64),
+        user: User = Depends(require_user),
     ) -> list[BookingResponse]:
+        if user_id is not None and user_id != user.user_id:
+            raise HTTPException(
+                status_code=403, detail="You can only view your own bookings."
+            )
         try:
-            bookings = list_booking_history(user_id, database_path)
+            bookings = list_booking_history(user.user_id, database_path)
         except BookingNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except BookingDataError as error:
@@ -109,9 +206,15 @@ def create_app(
         response_model=BookingResponse,
         status_code=status.HTTP_201_CREATED,
     )
-    def post_booking(request: BookingCreateRequest) -> BookingResponse:
+    def post_booking(
+        request: BookingCreateRequest, user: User = Depends(require_user)
+    ) -> BookingResponse:
+        if request.user_id is not None and request.user_id != user.user_id:
+            raise HTTPException(
+                status_code=403, detail="You can only book for your signed-in account."
+            )
         try:
-            booking = create_booking(request.user_id, request.trip_id, database_path)
+            booking = create_booking(user.user_id, request.trip_id, database_path)
         except BookingNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except BookingConflictError as error:
@@ -122,10 +225,14 @@ def create_app(
 
     @application.patch("/api/bookings/{booking_id}", response_model=BookingResponse)
     def patch_booking(
-        booking_id: str, request: BookingStatusRequest
+        booking_id: str,
+        request: BookingStatusRequest,
+        user: User = Depends(require_user),
     ) -> BookingResponse:
         try:
-            booking = update_booking_status(booking_id, request.status, database_path)
+            booking = update_booking_status(
+                booking_id, request.status, database_path, owner_user_id=user.user_id
+            )
         except BookingNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except BookingConflictError as error:
@@ -137,9 +244,9 @@ def create_app(
     @application.delete(
         "/api/bookings/{booking_id}", status_code=status.HTTP_204_NO_CONTENT
     )
-    def remove_booking(booking_id: str) -> Response:
+    def remove_booking(booking_id: str, user: User = Depends(require_user)) -> Response:
         try:
-            delete_booking(booking_id, database_path)
+            delete_booking(booking_id, database_path, owner_user_id=user.user_id)
         except BookingNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except BookingDataError as error:

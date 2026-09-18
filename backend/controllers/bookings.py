@@ -116,6 +116,8 @@ def update_booking_status(
     booking_id: str,
     status: str,
     database_path: str | Path = DEFAULT_DATABASE_PATH,
+    *,
+    owner_user_id: str | None = None,
 ) -> BookingHistoryEntry:
     """Cancel or restore a booking without discarding history."""
     if status not in {"confirmed", "cancelled"}:
@@ -123,6 +125,8 @@ def update_booking_status(
     database = DatabaseController(database_path)
     with _booking_errors(), database.transaction():
         existing = database.get(Booking, booking_id)
+        if owner_user_id is not None and existing.user_id != owner_user_id:
+            raise BookingNotFoundError(f"Booking {booking_id!r} was not found.")
         saved = database.update(replace(existing, status=cast(BookingStatus, status)))
         return _history_entry(database, saved)
 
@@ -130,7 +134,13 @@ def update_booking_status(
 def delete_booking(
     booking_id: str,
     database_path: str | Path = DEFAULT_DATABASE_PATH,
+    *,
+    owner_user_id: str | None = None,
 ) -> None:
     """Permanently remove the booking; return None on success."""
-    with _booking_errors():
-        DatabaseController(database_path).delete(Booking, booking_id)
+    database = DatabaseController(database_path)
+    with _booking_errors(), database.transaction():
+        existing = database.get(Booking, booking_id)
+        if owner_user_id is not None and existing.user_id != owner_user_id:
+            raise BookingNotFoundError(f"Booking {booking_id!r} was not found.")
+        database.delete(Booking, booking_id)

@@ -10,20 +10,19 @@ export async function fetchUsers() {
   return users
 }
 
-export async function fetchBookingHistory(userId) {
-  const query = new URLSearchParams({ user_id: userId })
-  const bookings = await requestJson(`${bookingsEndpoint}?${query}`)
+export async function fetchBookingHistory() {
+  const bookings = await requestJson(bookingsEndpoint)
   if (!Array.isArray(bookings)) {
     throw new Error('Booking history returned an unexpected response.')
   }
   return bookings
 }
 
-export function createBooking(userId, tripId) {
+export function createBooking(tripId) {
   return requestJson(bookingsEndpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId, trip_id: tripId }),
+    body: JSON.stringify({ trip_id: tripId }),
   })
 }
 

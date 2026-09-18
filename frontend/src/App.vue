@@ -5,12 +5,14 @@ import {
   createBooking,
   deleteBooking,
   fetchBookingHistory,
-  fetchUsers,
   updateBookingStatus,
 } from './api/bookings.js'
 import { searchAvailableStays } from './api/stays.js'
 
 import StayCard from './components/StayCard.vue'
+import SignInForm from './components/SignInForm.vue'
+import { fetchCurrentUser, signIn, signOut } from './api/authentication.js'
+import { ApiError } from './api/request.js'
 import { sortStays } from './utils/stays.js'
 
 const hotelName = ref('')
@@ -21,8 +23,10 @@ const isSearchLoading = ref(false)
 const stays = ref([])
 const visibleStays = computed(() => sortStays(stays.value, priceOrder.value))
 
-const users = ref([])
-const selectedUserId = ref('')
+const currentUser = ref(null)
+const authError = ref('')
+const isAuthBusy = ref(true)
+const isSessionChecking = ref(true)
 const selectedTripId = ref('')
 const bookings = ref([])
 const bookingError = ref('')
@@ -41,8 +45,66 @@ function formatCurrency(value) {
   return currencyFormatter.format(Number(value))
 }
 
-function selectedUserName() {
-  return users.value.find((user) => user.user_id === selectedUserId.value)?.display_name ?? ''
+function clearAccount() {
+  currentUser.value = null
+  bookings.value = []
+  selectedTripId.value = ''
+  bookingError.value = ''
+  bookingNotice.value = ''
+  historyError.value = ''
+}
+
+function handleAccountError(error, fallback) {
+  if (error instanceof ApiError && error.status === 401) {
+    clearAccount()
+    authError.value = 'Your session ended. Sign in again to continue.'
+  }
+  return error instanceof Error ? error.message : fallback
+}
+
+async function restoreSession() {
+  try {
+    currentUser.value = await fetchCurrentUser()
+    if (currentUser.value) await loadBookingHistory()
+  } catch (error) {
+    authError.value = error instanceof Error ? error.message : 'Your session could not be checked.'
+  } finally {
+    isAuthBusy.value = false
+    isSessionChecking.value = false
+  }
+}
+
+async function submitSignIn({ username, password }) {
+  if (isAuthBusy.value) return
+  authError.value = ''
+  isAuthBusy.value = true
+  try {
+    currentUser.value = await signIn(username, password)
+    bookingError.value = ''
+    bookingNotice.value = ''
+    await loadBookingHistory()
+  } catch (error) {
+    authError.value = error instanceof Error ? error.message : 'Sign-in failed.'
+  } finally {
+    isAuthBusy.value = false
+  }
+}
+
+async function submitSignOut() {
+  if (isAuthBusy.value) return
+  authError.value = ''
+  isAuthBusy.value = true
+  try {
+    await signOut()
+    isAuthBusy.value = false
+    clearAccount()
+    await nextTick()
+    document.querySelector('#username')?.focus()
+  } catch (error) {
+    authError.value = error instanceof Error ? error.message : 'Sign-out failed.'
+  } finally {
+    isAuthBusy.value = false
+  }
 }
 
 async function submitSearch() {
@@ -77,43 +139,32 @@ async function submitSearch() {
 async function chooseStay(stay) {
   selectedTripId.value = stay.trip_id
   bookingError.value = ''
-  bookingNotice.value = `${stay.trip_name} selected. Complete the booking form.`
+  bookingNotice.value = currentUser.value
+    ? `${stay.trip_name} selected. Complete the booking form.`
+    : `${stay.trip_name} selected. Sign in to book this stay.`
   await nextTick()
-  const bookingForm = document.querySelector('#booking-form')
+  const bookingForm = document.querySelector(currentUser.value ? '#booking-form' : '#sign-in-form')
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   bookingForm?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' })
-  document.querySelector('#selected-stay')?.focus({ preventScroll: true })
-}
-
-async function loadUsers() {
-  bookingError.value = ''
-  try {
-    users.value = await fetchUsers()
-    if (users.value.length && !selectedUserId.value) {
-      selectedUserId.value = users.value[0].user_id
-      await loadBookingHistory()
-    }
-  } catch (requestError) {
-    bookingError.value =
-      requestError instanceof Error ? requestError.message : 'Travelers failed to load.'
-  }
+  document.querySelector(currentUser.value ? '#selected-stay' : '#username')?.focus({ preventScroll: true })
 }
 
 async function loadBookingHistory() {
-  const requestedUserId = selectedUserId.value
+  const requestedUserId = currentUser.value?.user_id
   historyError.value = ''
   bookings.value = []
   if (!requestedUserId) return
 
   isHistoryLoading.value = true
   try {
-    const history = await fetchBookingHistory(requestedUserId)
-    if (requestedUserId === selectedUserId.value) {
+    const history = await fetchBookingHistory()
+    if (requestedUserId === currentUser.value?.user_id) {
       bookings.value = history
     }
   } catch (requestError) {
-    historyError.value =
-      requestError instanceof Error ? requestError.message : 'Booking history failed to load.'
+    if (requestedUserId === currentUser.value?.user_id) {
+      historyError.value = handleAccountError(requestError, 'Booking history failed to load.')
+    }
   } finally {
     isHistoryLoading.value = false
   }
@@ -122,19 +173,23 @@ async function loadBookingHistory() {
 async function submitBooking() {
   bookingError.value = ''
   bookingNotice.value = ''
-  if (!selectedUserId.value || !selectedTripId.value) {
-    bookingError.value = 'Choose a traveler and a stay before booking.'
+  if (!currentUser.value || !selectedTripId.value) {
+    bookingError.value = 'Sign in and choose a stay before booking.'
     return
   }
 
+  const requestedUserId = currentUser.value.user_id
   isBookingSaving.value = true
   try {
-    const booking = await createBooking(selectedUserId.value, selectedTripId.value)
+    const booking = await createBooking(selectedTripId.value)
+    if (requestedUserId !== currentUser.value?.user_id) return
     bookingNotice.value = `Booking ${booking.booking_id} was created.`
     selectedTripId.value = ''
     await loadBookingHistory()
   } catch (requestError) {
-    bookingError.value = requestError instanceof Error ? requestError.message : 'Booking failed.'
+    if (requestedUserId === currentUser.value?.user_id) {
+      bookingError.value = handleAccountError(requestError, 'Booking failed.')
+    }
   } finally {
     isBookingSaving.value = false
   }
@@ -143,14 +198,17 @@ async function submitBooking() {
 async function cancelBooking(bookingId) {
   bookingError.value = ''
   bookingNotice.value = ''
+  const requestedUserId = currentUser.value?.user_id
   mutatingBookingId.value = bookingId
   try {
     await updateBookingStatus(bookingId, 'cancelled')
+    if (requestedUserId !== currentUser.value?.user_id) return
     bookingNotice.value = `Booking ${bookingId} was cancelled.`
     await loadBookingHistory()
   } catch (requestError) {
-    bookingError.value =
-      requestError instanceof Error ? requestError.message : 'Cancellation failed.'
+    if (requestedUserId === currentUser.value?.user_id) {
+      bookingError.value = handleAccountError(requestError, 'Cancellation failed.')
+    }
   } finally {
     mutatingBookingId.value = ''
   }
@@ -164,13 +222,17 @@ async function removeBooking(bookingId) {
 
   bookingError.value = ''
   bookingNotice.value = ''
+  const requestedUserId = currentUser.value?.user_id
   mutatingBookingId.value = bookingId
   try {
     await deleteBooking(bookingId)
+    if (requestedUserId !== currentUser.value?.user_id) return
     bookingNotice.value = `Booking ${bookingId} was deleted.`
     await loadBookingHistory()
   } catch (requestError) {
-    bookingError.value = requestError instanceof Error ? requestError.message : 'Deletion failed.'
+    if (requestedUserId === currentUser.value?.user_id) {
+      bookingError.value = handleAccountError(requestError, 'Deletion failed.')
+    }
   } finally {
     mutatingBookingId.value = ''
   }
@@ -185,7 +247,7 @@ function focusSearch() {
   document.querySelector('#hotel-name')?.focus()
 }
 
-onMounted(loadUsers)
+onMounted(restoreSession)
 </script>
 
 <template>
@@ -204,6 +266,13 @@ onMounted(loadUsers)
       <nav class="site-nav" aria-label="Main navigation">
         <a href="#search-title" @click.prevent="focusSearch">Find a stay</a>
         <a href="#history-title">My bookings <span aria-hidden="true">↗</span></a>
+        <template v-if="currentUser">
+          <span class="account-name">{{ currentUser.display_name }}</span>
+          <button class="secondary-button" type="button" :disabled="isAuthBusy" @click="submitSignOut">
+            {{ isAuthBusy ? 'Please wait…' : 'Sign out' }}
+          </button>
+        </template>
+        <a v-else href="#auth-title">Sign in</a>
       </nav>
     </div>
   </header>
@@ -214,6 +283,15 @@ onMounted(loadUsers)
       <h1 id="page-title">Find your next<br /><span>hotel stay.</span></h1>
       <p class="intro">A great place to stay. Something to look forward to.</p>
     </header>
+
+    <SignInForm
+      v-if="!currentUser"
+      :busy="isAuthBusy"
+      :checking="isSessionChecking"
+      :error="authError"
+      @sign-in="submitSignIn"
+    />
+    <p v-else-if="authError" class="message-text error-text" role="alert">{{ authError }}</p>
 
     <section class="search-section" aria-labelledby="search-title">
       <h2 id="search-title" class="visually-hidden">Find a hotel stay</h2>
@@ -315,25 +393,10 @@ onMounted(loadUsers)
         <div class="section-heading">
           <p class="step-label">Your next getaway</p>
           <h2 id="booking-title">Book your stay</h2>
-          <p>Choose a traveler and an available stay.</p>
+          <p>Choose an available stay for your account.</p>
         </div>
-        <form id="booking-form" class="booking-form" @submit.prevent="submitBooking">
-          <div class="field">
-            <label for="traveler">Traveler</label>
-            <select
-              id="traveler"
-              v-model="selectedUserId"
-              name="traveler"
-              required
-              :disabled="!users.length"
-              @change="loadBookingHistory"
-            >
-              <option value="" disabled>Choose a traveler</option>
-              <option v-for="user in users" :key="user.user_id" :value="user.user_id">
-                {{ user.display_name }}
-              </option>
-            </select>
-          </div>
+        <form v-if="currentUser" id="booking-form" class="booking-form" @submit.prevent="submitBooking">
+          <p class="booking-traveler">Booking for <strong>{{ currentUser.display_name }}</strong></p>
           <div class="field">
             <label for="selected-stay">Stay &amp; dates</label>
             <select id="selected-stay" v-model="selectedTripId" name="selected-stay" required>
@@ -346,12 +409,13 @@ onMounted(loadUsers)
           <button
             class="primary-button booking-submit"
             type="submit"
-            :disabled="isBookingSaving || !users.length"
+            :disabled="isBookingSaving || isAuthBusy"
           >
             {{ isBookingSaving ? 'Creating…' : 'Create booking' }}
             <span aria-hidden="true">→</span>
           </button>
         </form>
+        <p v-else class="empty-history"><a href="#auth-title">Sign in</a> to create a booking.</p>
         <div class="message-stack" aria-live="polite">
           <p v-if="bookingError" class="message-text error-text" role="alert">
             {{ bookingError }}
@@ -365,7 +429,7 @@ onMounted(loadUsers)
       <div class="section-heading history-heading">
         <p class="step-label">Your travel plans</p>
         <h2 id="history-title" tabindex="-1">My bookings</h2>
-        <p v-if="selectedUserId">{{ selectedUserName() }}</p>
+        <p v-if="currentUser">{{ currentUser.display_name }}</p>
       </div>
       <p v-if="isHistoryLoading" class="loading-message">Loading booking history…</p>
       <p v-else-if="historyError" class="message-text error-text" role="alert">
@@ -408,9 +472,9 @@ onMounted(loadUsers)
         </article>
         <p v-if="!bookings.length" class="empty-history">
           {{
-            selectedUserId
-              ? 'This traveler has no bookings yet.'
-              : 'Choose a traveler to view history.'
+            currentUser
+              ? 'You have no bookings yet.'
+              : 'Sign in to view your bookings.'
           }}
         </p>
       </div>

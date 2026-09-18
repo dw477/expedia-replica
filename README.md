@@ -74,11 +74,69 @@ backend/.venv/bin/python -m pytest backend/tests
 The frontend sends all searches and booking operations through FastAPI. Available
 booking routes are:
 
-- `GET /api/users`
-- `GET /api/bookings?user_id=U001`
+- `GET /api/users` (signed-in user only)
+- `GET /api/bookings` (signed-in user’s history)
 - `POST /api/bookings`
 - `PATCH /api/bookings/{booking_id}`
 - `DELETE /api/bookings/{booking_id}`
+
+## Authentication
+
+Sign in with a username and password to create, view, cancel, or delete bookings.
+Hotel search is public. Users can manage only their own bookings; the traveler
+picker has been replaced by the signed-in account.
+
+`data/users.csv` holds `user_id,display_name,username,password_hash`. Password data
+is a salted PBKDF2-SHA256 hash (600,000 iterations), never readable password text.
+The CSV is the authentication source of truth and is read on sign-in/session
+validation; changing its username/hash invalidates existing sessions. SQLite
+stores public user identities and expiring session digests, not passwords.
+
+The six fictional sample accounts are `traveler1` through `traveler6`. Their demo
+passwords are `TravelDemo1!` through `TravelDemo6!`, respectively. For example:
+
+- Username: `traveler6`
+- Password: `TravelDemo6!`
+
+These are public assignment fixtures. Keep real account credentials out of Git.
+To generate a replacement hash without putting a password in shell history:
+
+```sh
+backend/.venv/bin/python -m frontend.hash_password
+```
+
+Paste the resulting hash into that user's `password_hash` column. Usernames in the
+CSV must be unique lowercase names of 3–64 characters (letters, digits, `.`, `_`,
+`-`). Sign-in trims/case-folds usernames; passwords preserve case and whitespace.
+There is no public registration flow.
+
+Authentication endpoints are:
+
+- `POST /api/auth/login` with `{ "username": "traveler6", "password": "TravelDemo6!" }`
+- `GET /api/auth/me` to restore the signed-in account
+- `POST /api/auth/logout` to revoke the session and clear its cookie
+
+Sessions expire after eight hours and survive backend restarts. Cookies are
+HTTP-only, host-only, scoped to `/api`, and `SameSite=Lax`; the browser stores no
+session token in local storage. Mutating requests require
+`X-Requested-With: XMLHttpRequest`, added by the frontend request adapter.
+Booking creation accepts `{ "trip_id": "T001" }`; the API derives `user_id` from
+the authenticated session. An optional legacy `user_id` must match that account.
+Private responses use `Cache-Control: no-store`.
+
+Startup adds the session table to existing databases without re-importing the
+starter data or changing bookings. No database reset is needed. The existing
+users table stays compatible with its original public identity fields.
+
+Local HTTP development uses non-secure cookies. For an HTTPS deployment, start
+with `EXPEDIA_SECURE_COOKIES=true` so cookies require HTTPS:
+
+```sh
+EXPEDIA_SECURE_COOKIES=true backend/.venv/bin/python -m uvicorn backend.app:app
+```
+
+The View and API must share one browser origin (Vite's configured `/api` proxy does
+this in development); cross-origin CORS access is not enabled.
 
 The frontend uses Vue with Vite and requires a Node.js version accepted by the `engines` field in `frontend/package.json`:
 
@@ -96,4 +154,4 @@ npm run build
 node --test tests/*.test.js
 ```
 
-Do not commit credentials, API keys, or local environment files.
+Do not commit real credentials, API keys, or local environment files.
