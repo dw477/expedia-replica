@@ -2,7 +2,7 @@
 
 ## Repository and commit
 Repository: https://github.com/dw477/expedia-replica
-Commit: 67c1a59
+Commit: e762734
 
 ## Implementation
 The frontend recieves data given by the user, FastAPI takes the data and sends it to the backend, and the backend sends information back to the frontend to be displayed.

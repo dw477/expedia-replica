@@ -1,13 +1,33 @@
 # MVC Architecture
 
+Reviewed on 2026-09-21 against `main` at `df8632f`.
+
 The application uses Vue as its browser View and Python/FastAPI controllers over
 SQLite. UI and CSS stay in `frontend/`. The optional plain-text search View lives
-in `frontend/cli.py`; its password-hash entry tool is `frontend/hash_password.py`. `backend/app.py` exposes the ASGI app and factory; old backend
-module paths remain thin compatibility entry points.
+in `frontend/cli.py`; its password-hash entry tool is `frontend/hash_password.py`.
+`backend/app.py` exposes the ASGI app and factory; old backend module paths remain
+thin compatibility entry points.
+
+## Changes since the previous handoff
+
+The previous handoff described the booking workflow at `99ed4cc`. Since then:
+
+- The reference-based interface became a responsive desktop/mobile layout with
+  stay cards, local price sorting, and a booking panel.
+- Backend entities, storage contracts, and business operations moved into explicit
+  Model and Controller modules; HTTP schemas now have one OpenAPI source of truth.
+- CSV-backed authentication replaced the traveler picker with session-owned
+  bookings. Registration now creates an account and signs it in atomically across
+  the credential CSV and SQLite, with recovery for interrupted saves.
+- Signed-in search submissions now drive daily, user-specific surge pricing.
+  Bookings save their creation rate, and schema version 3 upgrades existing data
+  without reseeding it.
+
+See [the current handoff](../handoffs/current.md) for verification and follow-up work.
 
 ## Models identified from the supplied CSVs
 
-The CSVs have 8 hotels, 6 users, 12 trips, and 6 bookings. Each ID column is unique;
+The supplied seed CSVs have 8 hotels, 6 users, 12 trips, and 6 bookings. Each ID column is unique;
 all 12 hotel references and all 12 booking references resolve. Hotels H001–H003
 and H007 have multiple trips. U001 has two bookings; U006 has none. There are four
 confirmed and two cancelled bookings, with no duplicate confirmed user/trip pair.
@@ -57,6 +77,9 @@ or seed until `initialize(data_directory)` is called.
 | `delete(Model, id)` | Supported class and text ID | `None`; missing IDs raise |
 | `transaction(write=True)` | Write/read mode | Context yielding the controller with one shared connection |
 | `list_search_counts(user_id, start, end)` | User ID and half-open Unix timestamp bounds | `list[SearchQueryCount]`, grouped and ordered by normalized query |
+| `list_user_accounts(data_directory)` | Credential CSV directory, outside a workflow transaction | Validated `list[UserAccount]` linked to existing SQLite users |
+| `register_user_account(account, session, data_directory, previous_session_id=None)` | Validated account/session; optional session digest to revoke | Public `User`; owns its transaction and CSV recovery protocol |
+| `delete_expired_sessions(now)` | Non-negative Unix timestamp | Number of expired session rows deleted |
 
 CRUD supports all four travel models, AuthSession, and SearchHistory. Reads never return SQLite rows or open connections.
 SQL identifiers come from internal model mappings; values are parameterized.
@@ -73,9 +96,10 @@ or invalid stored data). Invalid entity construction raises `ValueError` before 
 Initialization imports UTF-8 BOM CSVs in parent-first order using entity validation
 in a single transaction, audits references with `PRAGMA foreign_key_check`, and
 sets a seed marker only after successful import. Failed imports can be retried.
-Subsequent initialization audits references without re-importing, preserving new,
-updated, and deleted records. Existing databases use the same schema; this change
-requires no destructive migration.
+Subsequent initialization upgrades the schema when needed, recovers interrupted
+registrations, and audits references without re-importing, preserving new,
+updated, and deleted records. Schema version 3 adds search history and snapshots
+legacy booking rates as described below; no database reset is required.
 
 ## Business controller contracts
 
@@ -140,7 +164,8 @@ Schema version 3 adds history and the booking rate column. A one-time migration
 snapshots each preexisting booking's currently displayed hotel rate, including
 cancelled bookings. Initialization is atomic and idempotent and never restores
 deleted seed records. Seed bookings resolve their initial rate from their trip's
-hotel; the original CSV formats remain unchanged. Nights and totals are not stored.
+hotel; the pricing feature does not change any CSV columns. Authentication's
+additional user columns remain required. Nights and totals are not stored.
 
 ## Authentication contracts
 
@@ -220,8 +245,9 @@ Hotel search stays public. The HTTP controller authenticates all booking routes
 and derives the owner from the session; arbitrary submitted owner IDs cannot grant
 access. Status/deletion controllers receive `owner_user_id` and check ownership
 inside the write transaction. A foreign booking is indistinguishable from a
-missing one (404). The View restores `/api/auth/me` on mount, removes the traveler
-picker, clears private state on sign-out/401, and keeps secrets out of local storage.
+missing one (404). The View restores `/api/auth/me` on mount, uses the signed-in
+identity instead of a traveler picker, clears private state on sign-out/401, and
+keeps secrets out of local storage.
 
 ## Controller–View HTTP contract
 
@@ -272,3 +298,47 @@ The View collects input, requests data, and manages selection/loading/error stat
 It formats dates/currency and sorts returned results for presentation. It never
 calculates authoritative prices, assigns booking IDs/status policy, or accesses
 persistence. The CLI renders its own text table from the same controller outputs.
+
+## Browser View and interaction state
+
+`App.vue` coordinates search, authentication, selection, and booking history.
+`StayCard.vue`, `SignInForm.vue`, and `CreateAccountForm.vue` own reusable
+presentation. API adapters share `src/api/request.js` for same-origin cookies,
+the mutation header, response parsing, and errors. Registration places display
+name before username and gives a short password hint; field errors explain the
+remaining constraints without exposing submitted credentials.
+
+The cream/navy/yellow layout presents horizontal stay cards beside the booking
+panel on desktop, then stacks sections on smaller screens. History uses two
+columns on larger screens and one on mobile. Cards distinguish nightly rates
+from stay totals and explicitly label photo placeholders. Ratings, amenities,
+flights, and bundle savings are absent because the API does not supply them.
+`src/utils/stays.js` sorts returned totals numerically while preserving the
+original result/selector order. All offered dates come from fixed trips.
+
+Choosing a stay moves focus to the relevant booking or account form and respects
+reduced-motion preferences. Inputs have labels, busy actions are disabled, and
+errors/status messages use alert or live regions. Successful sign-in and
+registration refresh the last submitted search with GET before loading history.
+Search revision checks discard stale responses after a newer request or account
+clearing; booking-history responses are checked against the active identity.
+The browser never supplies a rate, and creation uses the server's policy at that
+moment rather than treating an earlier search result as a locked quote.
+
+## Verification and scope
+
+Backend pytest coverage exercises model validation, MVC/storage contracts,
+transaction rollback, API ownership and CSRF, session lifecycle, registration
+recovery and concurrency, pricing thresholds and EST boundaries, saved rates,
+and schema upgrades. Frontend Node tests cover API adapters, rendered form/card
+markup, sorting, and search/account state with mocked requests. They do not
+constitute browser end-to-end or visual layout verification. See the handoff for
+the latest commands, counts, and warnings.
+
+The application remains a fixed-stay assignment prototype: no room inventory,
+payment processing, taxes/fees, city/date filters, or production deployment is
+implemented. The API/controller can restore cancelled bookings; the browser
+currently offers cancellation and deletion only. Registration's file lock uses
+POSIX `fcntl`; hosting must support it and provide writable persistent CSV and
+SQLite storage. HTTPS hosting also needs secure cookies and one browser origin
+for the View and API.
