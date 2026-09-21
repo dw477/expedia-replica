@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterator, cast
 from uuid import uuid4
 
+from backend.controllers import pricing
 from backend.controllers.database import (
     DEFAULT_DATABASE_PATH,
     DatabaseController,
@@ -67,7 +68,7 @@ def _history_entry(
         state=hotel.state,
         check_in=trip.check_in,
         check_out=trip.check_out,
-        nightly_rate_usd=hotel.nightly_rate_usd,
+        nightly_rate_usd=booking.nightly_rate_usd,
         booked_on=booking.booked_on,
         status=booking.status,
     )
@@ -100,14 +101,20 @@ def create_booking(
 ) -> BookingHistoryEntry:
     """Generate an ID and create a confirmed booking; SQLite enforces uniqueness."""
     database = DatabaseController(database_path)
-    booking = Booking(
-        f"B{uuid4().hex.upper()}",
-        user_id,
-        trip_id,
-        booked_on or date.today(),
-        "confirmed",
-    )
     with _booking_errors(), database.transaction():
+        trip = database.get(Trip, trip_id)
+        hotel = database.get(Hotel, trip.hotel_id)
+        queries = pricing.surged_queries(
+            database, user_id, pricing.current_timestamp()
+        )
+        booking = Booking(
+            f"B{uuid4().hex.upper()}",
+            user_id,
+            trip_id,
+            booked_on or date.today(),
+            "confirmed",
+            pricing.nightly_rate(hotel, queries),
+        )
         saved = database.create(booking)
         return _history_entry(database, saved)
 

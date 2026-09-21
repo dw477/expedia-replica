@@ -13,7 +13,7 @@ from backend.models.entities import BookingStatus
 
 
 class HotelAvailabilityResponse(BaseModel):
-    """JSON representation of an existing hotel availability result."""
+    """Availability with this user's applicable nightly rate and derived total."""
 
     trip_id: str
     trip_name: str
@@ -25,6 +25,14 @@ class HotelAvailabilityResponse(BaseModel):
     nights: int
     nightly_rate_usd: Decimal
     stay_price_usd: Decimal
+
+
+class SearchRequest(BaseModel):
+    """A submitted search; identity always comes from the session cookie."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hotel_name: str
 
 
 class UserResponse(BaseModel):

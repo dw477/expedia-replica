@@ -21,7 +21,8 @@ from typing import Any, Iterator, TypeVar
 from backend.models import AuthSession, Booking, Hotel, Trip, User, UserAccount
 from backend.models.authentication import USER_ACCOUNT_COLUMNS
 from backend.models.entities import validate_nightly_rate
-from backend.models.schema import SCHEMA_STATEMENTS
+from backend.models.schema import BOOKING_RATE_MIGRATION, SCHEMA_STATEMENTS
+from backend.models.search import SearchHistory, SearchQueryCount
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIRECTORY = PROJECT_ROOT / "data"
@@ -78,8 +79,20 @@ def initialize_database(
         for statement in SCHEMA_STATEMENTS:
             connection.execute(statement)
 
+        if "nightly_rate_cents" not in {
+            row["name"] for row in connection.execute("PRAGMA table_info(bookings)")
+        }:
+            connection.execute(BOOKING_RATE_MIGRATION)
+            # Freeze the prices existing bookings displayed before this upgrade.
+            connection.execute(
+                "UPDATE bookings SET nightly_rate_cents = ("
+                "SELECT hotels.nightly_rate_cents FROM trips JOIN hotels "
+                "ON hotels.hotel_id = trips.hotel_id "
+                "WHERE trips.trip_id = bookings.trip_id)"
+            )
+
         connection.execute(
-            "INSERT INTO app_metadata(key, value) VALUES ('schema_version', '2') "
+            "INSERT INTO app_metadata(key, value) VALUES ('schema_version', '3') "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         )
         with _account_file_lock(Path(data_directory) / "users.csv"):
@@ -155,6 +168,15 @@ def _seed_database(connection: sqlite3.Connection, data_directory: Path) -> None
             for name in ("check_in", "check_out", "booked_on"):
                 if name in values:
                     values[name] = date.fromisoformat(_iso_date(row, name, source))
+            if model is Booking:
+                rate = connection.execute(
+                    "SELECT hotels.nightly_rate_cents FROM trips JOIN hotels "
+                    "ON hotels.hotel_id = trips.hotel_id WHERE trips.trip_id = ?",
+                    (values["trip_id"],),
+                ).fetchone()
+                if rate is None:
+                    raise ValueError(f"{source} references a missing trip")
+                values["nightly_rate_usd"] = Decimal(rate[0]) / 100
             try:
                 entity = model(**values)
             except ValueError as error:
@@ -308,19 +330,25 @@ class RecordConflictError(DatabaseError):
 
 # These identifiers are internal constants. Never accept table/column names from
 # callers; SQL values are always parameterized.
-Entity = TypeVar("Entity", bound=Hotel | User | Trip | Booking | AuthSession)
+Entity = TypeVar(
+    "Entity", bound=Hotel | User | Trip | Booking | AuthSession | SearchHistory
+)
 ENTITY_TABLES: dict[type, str] = {
     Hotel: "hotels",
     User: "users",
     Trip: "trips",
     Booking: "bookings",
     AuthSession: "auth_sessions",
+    SearchHistory: "search_history",
 }
 ENTITY_REFERENCES: dict[
     type,
-    tuple[tuple[str, type[Hotel | User | Trip | Booking | AuthSession]], ...],
+    tuple[
+        tuple[str, type[Hotel | User | Trip | Booking | AuthSession | SearchHistory]], ...
+    ],
 ] = {
     AuthSession: (("user_id", User),),
+    SearchHistory: (("user_id", User),),
     Trip: (("hotel_id", Hotel),),
     Booking: (("user_id", User), ("trip_id", Trip)),
 }
@@ -355,7 +383,7 @@ def _values(entity: Entity) -> tuple[Any, ...]:
 
 def _from_row(model: type[Entity], row: sqlite3.Row) -> Entity:
     values = dict(row)
-    if model is Hotel:
+    if model in {Hotel, Booking}:
         values["nightly_rate_usd"] = Decimal(values.pop("nightly_rate_cents")) / 100
     for name in ("check_in", "check_out", "booked_on"):
         if name in values:
@@ -378,6 +406,21 @@ class DatabaseController:
 
     def initialize(self, data_directory: str | Path = DEFAULT_DATA_DIRECTORY) -> bool:
         return initialize_database(self.database_path, data_directory)
+
+    def list_search_counts(
+        self, user_id: str, start: int, end: int
+    ) -> list[SearchQueryCount]:
+        """Count each normalized query separately in [start, end) Unix seconds."""
+        if type(start) is not int or type(end) is not int or not 0 <= start < end:
+            raise ValueError("Search count bounds must be ordered Unix timestamps")
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT search_query, COUNT(*) AS search_count FROM search_history "
+                "WHERE user_id = ? AND searched_at >= ? AND searched_at < ? "
+                "GROUP BY search_query ORDER BY search_query",
+                (user_id, start, end),
+            ).fetchall()
+            return [SearchQueryCount(**dict(row)) for row in rows]
 
     def delete_expired_sessions(self, now: int) -> int:
         """Prune expired authentication rows; return the number removed."""

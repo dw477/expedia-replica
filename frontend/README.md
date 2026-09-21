@@ -28,11 +28,18 @@ Vite forwards `/api` requests to `http://127.0.0.1:8000`.
 
 ## Functionality and data
 
-The API contracts in `backend/app.py` are the source of truth. The frontend API
+The JSON contracts in `backend/models/contracts.py`, exposed through `/openapi.json`,
+are the source of truth. The frontend API
 modules in `src/api/` use those existing routes for hotel-name search and booking
 creation, history, cancellation, and deletion. Search results contain fixed trip
 dates; the stay selector chooses among those trips. Price sorting happens locally
 using the stay total, without changing API result order or booking choices.
+
+Submitted searches use `POST /api/stays`. The server records non-empty signed-in
+submissions and returns the user's applicable surge prices. Signing in refreshes
+existing results with `GET /api/stays`, which does not count another search.
+Signing out or receiving a session-expiry response clears personalized results.
+Booking creation sends only the trip ID; the server determines and saves the rate.
 
 `src/components/StayCard.vue` contains the image placeholders. They are explicitly
 labeled as placeholders and do not represent real hotel photos. Cards show only

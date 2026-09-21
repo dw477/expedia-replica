@@ -80,6 +80,29 @@ booking routes are:
 - `PATCH /api/bookings/{booking_id}`
 - `DELETE /api/bookings/{booking_id}`
 
+## Search history and surge pricing
+
+Submitted searches use `POST /api/stays` with `{ "hotel_name": "Harbor" }`.
+`GET /api/stays?hotel_name=Harbor` reads prices without recording a search.
+Both support public searches; only non-empty submissions by signed-in users are
+recorded in the shared SQLite `search_history` table. Queries ignore case and
+collapse extra whitespace. Searches with no matching hotels are still recorded.
+
+Counts are separate for each user and normalized query and reset at midnight EST
+(fixed UTC−05:00). The current submission counts: searches 1–3 use the base nightly
+rate, and search 4 onward applies base × 1.2. Once any query qualifies, all hotels
+matching that query have surge pricing for that user for the rest of that day,
+including when reached through a different query. Surge never compounds or changes
+the hotel's base rate. Nightly rates round to whole cents with half cents rounded
+up; stay totals use the rounded nightly rate.
+
+New bookings use the user's applicable hotel price at creation and save that rate.
+Existing bookings, including cancelled/restored bookings, keep their saved rate.
+Startup automatically adds search history and snapshots existing booking prices
+without resetting the database or re-importing CSVs. The seed CSV formats stay the
+same. All search responses use `Cache-Control: no-store`, and submitted searches
+require the same CSRF header as other POST requests.
+
 ## Authentication
 
 Sign in with a username and password to create, view, cancel, or delete bookings.

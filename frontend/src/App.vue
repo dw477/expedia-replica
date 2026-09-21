@@ -22,6 +22,8 @@ const searchError = ref('')
 const hasSearched = ref(false)
 const isSearchLoading = ref(false)
 const stays = ref([])
+let lastSearchHotelName = ''
+let searchRevision = 0
 const visibleStays = computed(() => sortStays(stays.value, priceOrder.value))
 
 const currentUser = ref(null)
@@ -48,6 +50,11 @@ function formatCurrency(value) {
 }
 
 function clearAccount() {
+  searchRevision += 1
+  stays.value = []
+  hasSearched.value = false
+  isSearchLoading.value = false
+  lastSearchHotelName = ''
   currentUser.value = null
   bookings.value = []
   selectedTripId.value = ''
@@ -82,6 +89,7 @@ async function submitSignIn({ username, password }) {
   isAuthBusy.value = true
   try {
     currentUser.value = await signIn(username, password)
+    await refreshSearchPrices()
     bookingError.value = ''
     bookingNotice.value = ''
     await loadBookingHistory()
@@ -106,6 +114,7 @@ async function submitCreateAccount({ username, displayName, password }) {
   isAuthBusy.value = true
   try {
     currentUser.value = await createAccount(username, displayName, password)
+    await refreshSearchPrices()
     isCreatingAccount.value = false
     bookingError.value = ''
     bookingNotice.value = ''
@@ -135,6 +144,7 @@ async function submitSignOut() {
 }
 
 async function submitSearch() {
+  if (isSearchLoading.value || isAuthBusy.value) return
   const searchHotelName = hotelName.value.trim()
   searchError.value = ''
 
@@ -146,20 +156,34 @@ async function submitSearch() {
     return
   }
 
+  lastSearchHotelName = searchHotelName
+  await loadSearch(searchHotelName, true)
+}
+
+async function refreshSearchPrices() {
+  if (lastSearchHotelName) await loadSearch(lastSearchHotelName, false)
+}
+
+async function loadSearch(searchHotelName, submitted) {
+  const revision = ++searchRevision
+  searchError.value = ''
   isSearchLoading.value = true
   try {
-    stays.value = await searchAvailableStays(searchHotelName)
+    const results = await searchAvailableStays(searchHotelName, { submitted })
+    if (revision !== searchRevision) return
+    stays.value = results
     hasSearched.value = true
     if (!stays.value.some((stay) => stay.trip_id === selectedTripId.value)) {
       selectedTripId.value = ''
     }
   } catch (requestError) {
+    if (revision !== searchRevision) return
     stays.value = []
     hasSearched.value = false
     selectedTripId.value = ''
-    searchError.value = requestError instanceof Error ? requestError.message : 'Search failed.'
+    searchError.value = handleAccountError(requestError, 'Search failed.')
   } finally {
-    isSearchLoading.value = false
+    if (revision === searchRevision) isSearchLoading.value = false
   }
 }
 
@@ -198,6 +222,7 @@ async function loadBookingHistory() {
 }
 
 async function submitBooking() {
+  if (isBookingSaving.value || isAuthBusy.value || isSearchLoading.value) return
   bookingError.value = ''
   bookingNotice.value = ''
   if (!currentUser.value || !selectedTripId.value) {
@@ -350,7 +375,7 @@ onMounted(restoreSession)
             />
           </div>
         </div>
-        <button class="primary-button search-submit" type="submit" :disabled="isSearchLoading">
+        <button class="primary-button search-submit" type="submit" :disabled="isSearchLoading || isAuthBusy">
           {{ isSearchLoading ? 'Searching…' : 'Search' }} <span aria-hidden="true">→</span>
         </button>
       </form>
@@ -444,7 +469,7 @@ onMounted(restoreSession)
           <button
             class="primary-button booking-submit"
             type="submit"
-            :disabled="isBookingSaving || isAuthBusy"
+            :disabled="isBookingSaving || isAuthBusy || isSearchLoading"
           >
             {{ isBookingSaving ? 'Creating…' : 'Create booking' }}
             <span aria-hidden="true">→</span>

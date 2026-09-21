@@ -40,7 +40,9 @@ def database(tmp_path):
             {"hotel_id": "H002"},
         ),
         (
-            Booking("B999", "U006", "T001", date(2026, 9, 17), "confirmed"),
+            Booking(
+                "B999", "U006", "T001", date(2026, 9, 17), "confirmed", Decimal("150")
+            ),
             {"status": "cancelled"},
         ),
     ],
@@ -74,8 +76,12 @@ def test_referenced_parents_cannot_be_deleted(database, model, record_id):
     "entity",
     [
         Trip("T999", "missing", "Test Stay", date(2026, 10, 1), date(2026, 10, 3)),
-        Booking("B999", "missing", "T001", date(2026, 9, 17), "confirmed"),
-        Booking("B999", "U006", "missing", date(2026, 9, 17), "confirmed"),
+        Booking(
+            "B999", "missing", "T001", date(2026, 9, 17), "confirmed", Decimal("150")
+        ),
+        Booking(
+            "B999", "U006", "missing", date(2026, 9, 17), "confirmed", Decimal("150")
+        ),
     ],
 )
 def test_missing_references_reject_creation(database, entity):
@@ -137,9 +143,9 @@ def test_entities_reject_invalid_dates_status_and_blank_ids():
     with pytest.raises(ValueError):
         Trip("T999", "H001", "Test Stay", date(2026, 10, 3), date(2026, 10, 1))
     with pytest.raises(ValueError):
-        Booking("B999", "U001", "T001", "2026-09-17", "confirmed")
+        Booking("B999", "U001", "T001", "2026-09-17", "confirmed", Decimal("150"))
     with pytest.raises(ValueError):
-        Booking("B999", "U001", "T001", date(2026, 9, 17), "unknown")
+        Booking("B999", "U001", "T001", date(2026, 9, 17), "unknown", Decimal("150"))
     with pytest.raises(ValueError):
         User(" ", "Test Traveler")
 

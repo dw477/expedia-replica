@@ -41,6 +41,7 @@ from backend.models.contracts import (
     HotelAvailabilityResponse,
     LoginRequest,
     RegistrationRequest,
+    SearchRequest,
     UserResponse,
 )
 
@@ -103,7 +104,9 @@ def create_app(
                     headers={"Cache-Control": "no-store"},
                 )
         response = await call_next(request)
-        if request.url.path.startswith(("/api/auth/", "/api/bookings", "/api/users")):
+        if request.url.path.startswith(
+            ("/api/auth/", "/api/bookings", "/api/users", "/api/stays")
+        ):
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -114,6 +117,11 @@ def create_app(
             raise HTTPException(status_code=401, detail=str(error)) from error
         except AuthenticationDataError as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
+
+    def optional_user(request: Request) -> User | None:
+        # Public searches need no cookie. A supplied invalid cookie must surface
+        # session expiry so the View clears private results instead of mispricing.
+        return require_user(request) if request.cookies.get(cookie_name) else None
 
     def user_response(user: User) -> UserResponse:
         return UserResponse(user_id=user.user_id, display_name=user.display_name)
@@ -194,14 +202,28 @@ def create_app(
     @application.get("/api/stays", response_model=list[HotelAvailabilityResponse])
     def get_available_stays(
         hotel_name: str = Query(min_length=1, description="Hotel name to search"),
+        user: User | None = Depends(optional_user),
     ) -> list[HotelAvailabilityResponse]:
-        """Expose the framework-free availability search as JSON."""
+        """Read current prices without recording a submitted search."""
+        return available_stays(hotel_name, user, record_search=False)
 
+    @application.post("/api/stays", response_model=list[HotelAvailabilityResponse])
+    def submit_search(
+        search: SearchRequest, user: User | None = Depends(optional_user)
+    ) -> list[HotelAvailabilityResponse]:
+        """Record a signed-in non-empty search and return prices including it."""
+        return available_stays(search.hotel_name, user, record_search=True)
+
+    def available_stays(
+        hotel_name: str, user: User | None, *, record_search: bool
+    ) -> list[HotelAvailabilityResponse]:
         try:
             stays = search_available_stays(
                 hotel_name,
                 database_path=database_path,
                 data_directory=data_directory,
+                user_id=user.user_id if user else None,
+                record_search=record_search,
             )
         except SearchDataError as error:
             raise HTTPException(status_code=500, detail=str(error)) from error

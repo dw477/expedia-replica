@@ -87,9 +87,11 @@ class Booking:
     trip_id: str
     booked_on: date
     status: BookingStatus
+    nightly_rate_usd: Decimal
 
     def __post_init__(self) -> None:
         _validate_text(self)
         _validate_date(self.booked_on, "booked_on")
+        validate_nightly_rate(self.nightly_rate_usd)
         if self.status not in {"confirmed", "cancelled"}:
             raise ValueError("status must be confirmed or cancelled")

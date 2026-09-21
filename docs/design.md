@@ -17,7 +17,8 @@ confirmed and two cancelled bookings, with no duplicate confirmed user/trip pair
 | Hotel | `hotel_id`, `hotel_name`, `city`, `state`, `nightly_rate_usd` | One hotel has many trips |
 | User | `user_id`, `display_name`; CSV credential fields live in `UserAccount` | One user has many bookings |
 | Trip | `trip_id`, `hotel_id`, `trip_name`, `check_in`, `check_out` | References one hotel; has many bookings |
-| Booking | `booking_id`, `user_id`, `trip_id`, `booked_on`, `status` | References one user and one trip |
+| Booking | `booking_id`, `user_id`, `trip_id`, `booked_on`, `status`, `nightly_rate_usd` | References one user and one trip; saves its creation price |
+| SearchHistory | `search_id`, `user_id`, `search_query`, `searched_at` | References one user; shared history of submitted searches |
 
 A booking associates a user with a trip, forming the user/trip many-to-many
 relationship. It has its own stable ID because cancellation retains history and
@@ -49,14 +50,15 @@ or seed until `initialize(data_directory)` is called.
 | Method | Input | Output |
 | --- | --- | --- |
 | `initialize(data_directory)` | Seed directory (defaults to `data/`) | `bool`: true only on first import |
-| `get(Model, id)` | Hotel/User/Trip/Booking/AuthSession class and text ID | Validated entity; missing IDs raise |
+| `get(Model, id)` | Hotel/User/Trip/Booking/AuthSession/SearchHistory class and text ID | Validated entity; missing IDs raise |
 | `list(Model)` | Supported entity class | Entity list ordered by ID |
 | `create(entity)` | Complete validated entity | Persisted entity |
 | `update(entity)` | Complete validated entity under its existing ID | Updated entity; cannot rename IDs |
 | `delete(Model, id)` | Supported class and text ID | `None`; missing IDs raise |
 | `transaction(write=True)` | Write/read mode | Context yielding the controller with one shared connection |
+| `list_search_counts(user_id, start, end)` | User ID and half-open Unix timestamp bounds | `list[SearchQueryCount]`, grouped and ordered by normalized query |
 
-CRUD supports all four travel models and the internal AuthSession model. Reads never return SQLite rows or open connections.
+CRUD supports all four travel models, AuthSession, and SearchHistory. Reads never return SQLite rows or open connections.
 SQL identifiers come from internal model mappings; values are parameterized.
 Writes acquire a transaction before checking references. Workflow transactions
 commit on success and roll back on failure; read transactions provide a consistent
@@ -82,15 +84,15 @@ connections. Both take an optional `database_path` for isolated testing.
 
 | Controller operation | Input | Output |
 | --- | --- | --- |
-| `search_available_stays` | `hotel_name`, optional database path/seed directory | `list[HotelAvailability]` |
+| `search_available_stays` | `hotel_name`, optional database path/seed directory; keyword `user_id=None`, `record_search=True` | `list[HotelAvailability]` |
 | `list_users` | Optional database path | `list[User]` in ID order |
 | `list_booking_history` | `user_id`, optional database path | `list[BookingHistoryEntry]` |
 | `create_booking` | `user_id`, `trip_id`, optional path/`booked_on` date | Confirmed `BookingHistoryEntry` with generated ID |
 | `update_booking_status` | `booking_id`, `status`, optional path/`owner_user_id` | Updated `BookingHistoryEntry` |
 | `delete_booking` | `booking_id`, optional path/`owner_user_id` | `None` |
 
-`controllers/search.py` matches a hotel-name substring after trimming and
-case-folding. Results are ordered by trip ID; blank input and no matches return
+`controllers/search.py` matches a hotel-name substring after collapsing whitespace and
+case-folding in both the query and hotel name. Results are ordered by trip ID; blank input and no matches return
 `[]`. It initializes the database for the standalone CLI as well as API use and
 raises `SearchDataError` for data failures. The sample data guide includes city
 examples; the existing application contract searches hotel names.
@@ -106,6 +108,39 @@ including simultaneous writers and restoration of a cancelled booking.
 `HotelAvailability` contains trip ID/name, hotel name, city/state, check-in/out,
 nightly rate, and derived nights/stay total. `BookingHistoryEntry` adds booking
 ID, user ID/display name, booked-on date, and status.
+
+## Search history and user-specific surge pricing
+
+`models/search.py` defines immutable `SearchHistory(search_id, user_id,
+search_query, searched_at)` and `SearchQueryCount(search_query, search_count)`.
+All users share one SQLite history table; the user reference restricts deletion,
+and an index on user/time/query supports daily counts. Query normalization uses
+case-folding and collapses all whitespace runs to one space. Timestamps are Unix
+seconds. Non-empty signed-in submissions are recorded even when nothing matches;
+anonymous searches and read-only refreshes are not recorded.
+
+`controllers/pricing.py` defines daily boundaries at midnight EST, fixed UTC−05:00
+(no daylight-saving adjustment). Each user/query count includes the current
+submission. At four or more searches, every hotel whose normalized name contains
+that query costs base × 1.2 for that user for the rest of the day. Different queries
+count separately, but a qualifying query continues to surge the hotel even if a
+later search uses another query. Multiple qualifying queries never compound the
+multiplier. Base rates are untouched. Decimal `ROUND_HALF_UP` rounds the nightly
+rate to cents before the derived stay total is calculated.
+
+Search inserts and count/result reads share a write transaction, serializing
+concurrent submissions at the threshold. Booking creation reads the same policy
+inside its own write transaction; it requires only the trip, so omitting or changing
+a search query cannot bypass a hotel's surge. It saves the final nightly rate in
+`bookings.nightly_rate_cents`. History, cancellation, and restoration use that saved
+rate even after later searches, day changes, or hotel price edits. Existing bookings
+never gain surge. The client cannot submit a price or choose a pricing owner.
+
+Schema version 3 adds history and the booking rate column. A one-time migration
+snapshots each preexisting booking's currently displayed hotel rate, including
+cancelled bookings. Initialization is atomic and idempotent and never restores
+deleted seed records. Seed bookings resolve their initial rate from their trip's
+hotel; the original CSV formats remain unchanged. Nights and totals are not stored.
 
 ## Authentication contracts
 
@@ -176,8 +211,8 @@ after eight hours and survive restarts. Login rotates the previous browser sessi
 and prunes expired rows via `delete_expired_sessions(now) -> int`. A removed account
 or edited username/hash invalidates existing sessions at the next request.
 
-Startup creates the session table in both new and existing databases and records
-schema version 2 without overwriting seeded application records. Session rows use
+Startup creates the session table in both new and existing databases; schema version
+3 includes the pricing migration described above without overwriting seeded application records. Session rows use
 the database controller's typed CRUD and transaction contract. Credentials remain
 in CSV, so the public `users` table needs no credential migration.
 
@@ -197,7 +232,8 @@ and error mapping. Route handlers delegate business operations to controllers.
 
 | HTTP operation | Request | Successful response |
 | --- | --- | --- |
-| `GET /api/stays` | Required `hotel_name` query | 200, array of availability results |
+| `GET /api/stays` | Required `hotel_name` query; optional session | 200, current prices without recording a search |
+| `POST /api/stays` | Exactly `{hotel_name}`; optional session, CSRF header | 200, prices including this submission in the signed-in user's count |
 | `GET /api/users` | Valid session | 200, array containing only signed-in public identity |
 | `GET /api/bookings` | Valid session; optional matching `user_id` query | 200, array of booking history results |
 | `POST /api/bookings` | Valid session, `{trip_id}`; optional matching `user_id` | 201, booking result |
@@ -213,10 +249,16 @@ Duplicate registration usernames are 409; invalid registration fields are 422.
 Invalid credentials and missing/expired sessions are 401; storage failures are
 500. Cookie attributes are HTTP-only, host-only, SameSite=Lax, `/api` path, and
 secure when `EXPEDIA_SECURE_COOKIES=true`. HTTPS deployments require that setting;
-local HTTP development keeps it off. Auth/booking/user responses use `no-store`.
+local HTTP development keeps it off. Auth/booking/user/search responses use `no-store`.
 Every mutating API request requires `X-Requested-With: XMLHttpRequest` (403 if
 missing). The same-origin View adds this header; credentialed cross-origin CORS
 is not enabled, so a foreign browser origin cannot approve the required preflight.
+
+Search requests with no session remain public and return base prices. A supplied
+invalid or expired session returns 401 so the View clears private state. POST
+searches reject unknown fields, including supplied user IDs/prices; blank text
+returns `[]` without recording. On sign-in the View refreshes the last submitted
+query with GET, preserving counts; sign-out/expiry clears personalized results.
 
 Creation trims ID strings and requires 1–64 characters after trimming. Unknown
 request-body fields are rejected; status is limited to `confirmed`/`cancelled`.

@@ -80,8 +80,9 @@ These rules apply throughout the repository.
   authenticated session and reject a supplied different user ID. Status updates
   accept only `status`; unknown fields are rejected.
 - Search's public contract is `search_available_stays(hotel_name, database_path,
-  data_directory) -> list[HotelAvailability]`, ordered by trip ID with case-insensitive
-  substring matching; blank input returns `[]`, and failures raise `SearchDataError`.
+  data_directory, *, user_id=None, record_search=True) -> list[HotelAvailability]`,
+  ordered by trip ID with case-folded, whitespace-collapsed substring matching;
+  blank input returns `[]`, and failures raise `SearchDataError`.
   Booking methods return `User` or `BookingHistoryEntry` models; history is ordered
   by booking date and ID descending. They raise `BookingNotFoundError`,
   `BookingConflictError`, or `BookingDataError`; invalid status arguments raise
@@ -92,6 +93,37 @@ These rules apply throughout the repository.
 - Update these rules, API schemas, design documentation, and contract tests together
   when changing an input/output contract. See `docs/design.md` for fields, CSV
   analysis, public controller signatures, and HTTP routes.
+
+## Search History and Pricing Contracts
+
+- Store all users' search submissions in one `search_history` table. The immutable
+  `models/search.py` `SearchHistory` has `search_id`, `user_id` (foreign key),
+  normalized `search_query`, and `searched_at` (Unix seconds). Restrict deletion of
+  users referenced by history. Normalize with case-folding and whitespace collapse.
+- Only non-empty submitted searches by signed-in users are recorded, even with no
+  matches. `POST /api/stays` takes exactly `{hotel_name}` and requires the CSRF
+  header. `GET /api/stays` is a read-only refresh. Both use the optional session's
+  identity and `no-store`; an invalid supplied session returns 401, absent sessions
+  allow public base-price searches. The View refreshes prices on sign-in without
+  recording another submission and clears personalized results on sign-out/expiry.
+- `DatabaseController.list_search_counts(user_id, start, end)` returns immutable
+  `SearchQueryCount` results grouped by normalized query, ordered by query, over
+  the half-open Unix timestamp interval. Only the database controller issues SQL.
+- `controllers/pricing.py` owns the policy shared by search and bookings: count
+  queries separately for each user on the same EST day (fixed UTC−05:00), including
+  the current submission. Counts 1–3 use base; 4+ use base × 1.2 without compounding.
+  Any qualifying query matching a hotel's normalized name surges that hotel for
+  that user for that day, including results from another query. Round nightly rates
+  to whole cents with `ROUND_HALF_UP` before deriving stay totals.
+- Search insertion, counting, and results share a write transaction. New bookings
+  evaluate the same user/hotel policy within their creation transaction and save
+  `Booking.nightly_rate_usd` as integer cents. History and cancellation/restoration
+  retain this rate; hotel base rates never change through surge. The Booking model
+  requires this validated Decimal field. No client-supplied rate is accepted.
+- Schema version 3 adds history and stored booking rates. Initialization snapshots
+  the currently displayed base rate for preexisting bookings once; subsequent runs
+  preserve it. Seed bookings derive their initial rate through their trip/hotel;
+  the four CSV formats remain unchanged. Nights and totals remain derived.
 
 ## Authentication Contracts
 
