@@ -90,9 +90,36 @@ These rules apply throughout the repository.
 - Keep `backend/app.py` as the ASGI entry point. Existing `backend/database.py`,
   `backend/search.py`, and `backend/bookings.py` are compatibility entry points;
   add new implementation to the model/controller folders instead.
+- `controllers/configuration.py` loads the project-root `.env` at backend startup
+  using its own file path, preserving process environment overrides. Public
+  `GET /api/health` returns `{status: "ok", geoapify: "key is configured"}` or
+  `geoapify: "key is not configured"` with `no-store`. Missing, empty, and
+  whitespace-only keys are not configured. Never return the key or contact
+  Geoapify for this check; restart the backend after configuration edits.
 - Update these rules, API schemas, design documentation, and contract tests together
   when changing an input/output contract. See `docs/design.md` for fields, CSV
   analysis, public controller signatures, and HTTP routes.
+- `controllers/geocoding.py` exposes `lookup_zip(postcode: str) -> ZipLocation | None`.
+  Accept exactly five ASCII digits; invalid input raises `ValueError`. Use Geoapify
+  forward geocoding with postcode/type=postcode/filter=countrycode:us/format=json
+  and the configuration helper's backend-only key, with a finite timeout. Return
+  only an exact U.S. postcode result with valid coordinates; no acceptable match
+  returns `None`. Configuration failures raise `ZipConfigurationError` (a
+  `ZipLookupError` subclass); provider failures raise sanitized `ZipLookupError`.
+  `models/location.py` owns the immutable postcode/country_code/latitude/longitude/
+  optional locality result, separate from Hotel. Never expose credentials, full
+  provider URLs, or raw exception text. Public `GET /api/demo/zip-location` calls
+  this controller with fixed `"16802"`, returning `ZipLocationResponse` on 200,
+  or a fixed safe `{detail}` error: 503 for configuration, 404 for unresolved ZIP,
+  502 for provider failure. Public `GET /api/zip-location?postcode=02108` accepts
+  a required postcode of exactly five ASCII digits, preserving leading zeros,
+  and uses the same controller, response schema, and error mapping. Invalid or
+  missing input returns 422 before provider access. `ZipPostcode` in
+  `models/contracts.py` defines the HTTP input constraint. All responses use
+  `no-store`. The View's ZIP form and fixed demo button call these backend routes
+  through `frontend/src/api/` and share the same location results display. Keep
+  their request state separate from hotel search and disable both buttons while
+  busy. User-entered five-digit U.S. ZIP codes are supported alongside `"16802"`.
 
 ## Search History and Pricing Contracts
 

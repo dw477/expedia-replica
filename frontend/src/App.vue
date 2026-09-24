@@ -12,6 +12,7 @@ import { searchAvailableStays } from './api/stays.js'
 import StayCard from './components/StayCard.vue'
 import SignInForm from './components/SignInForm.vue'
 import CreateAccountForm from './components/CreateAccountForm.vue'
+import ZipLookupDemo from './components/ZipLookupDemo.vue'
 import { createAccount, fetchCurrentUser, signIn, signOut } from './api/authentication.js'
 import { ApiError } from './api/request.js'
 import { sortStays } from './utils/stays.js'
@@ -386,6 +387,8 @@ onMounted(restoreSession)
         Search by hotel name. Explore available dates and prices.
       </p>
     </section>
+
+    <ZipLookupDemo />
 
     <div class="stay-workspace">
       <section class="stays-section" aria-labelledby="results-title" :aria-busy="isSearchLoading">

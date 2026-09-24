@@ -57,6 +57,32 @@ Start the API from the project root:
 backend/.venv/bin/python -m uvicorn backend.app:app --reload
 ```
 
+The backend loads the project-root `.env` (beside `frontend/` and `backend/`)
+at startup using `backend/controllers/configuration.py` and the existing
+`python-dotenv` dependency. Set `GEOAPIFY_API_KEY` there; existing process
+environment variables take precedence. Restart the backend after adding,
+changing, or removing the setting; do not rely on `--reload` to notice `.env`
+edits. Keep this local file out of Git.
+
+`GET /api/health` returns `status: "ok"` and a `geoapify` field containing
+`"key is configured"` or `"key is not configured"`. Absent, empty, and
+whitespace-only values are not configured. This checks configuration presence
+only: it never returns the key or contacts Geoapify.
+
+`GET /api/demo/zip-location` makes a backend Geoapify lookup for the fixed ZIP
+`16802`. `GET /api/zip-location?postcode=02108` looks up an entered ZIP code;
+the required `postcode` must be exactly five ASCII digits (leading zeros are
+preserved), otherwise the backend returns 422 before calling Geoapify.
+A successful response contains only postcode, country code, latitude,
+longitude, and locality (or `null`). Missing/unavailable configuration returns
+503, an unresolved ZIP returns 404, and provider failure returns 502. Errors
+contain safe messages without credentials or provider URLs. The Vue app's
+"ZIP lookup demonstration" panel offers a ZIP input and "Look up ZIP" submit
+button alongside "Look up ZIP 16802". Both call the backend through the existing
+`/api` proxy and update the same location results display. They show progress or
+the backend error independently of hotel-name search, and both buttons are
+disabled while a lookup runs. All ZIP responses use `Cache-Control: no-store`.
+
 For the optional text View, search directly from the project root:
 
 ```sh

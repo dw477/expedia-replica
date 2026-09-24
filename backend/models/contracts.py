@@ -2,6 +2,7 @@
 
 from datetime import date
 from decimal import Decimal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -10,6 +11,28 @@ from backend.models.authentication import (
     validate_registration_password,
 )
 from backend.models.entities import BookingStatus
+
+
+class HealthResponse(BaseModel):
+    status: Literal["ok"]
+    geoapify: Literal["key is configured", "key is not configured"]
+
+
+ZipPostcode = Annotated[str, Field(min_length=5, max_length=5, pattern=r"^[0-9]{5}$")]
+
+
+class ZipLocationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    postcode: ZipPostcode
+    country_code: Literal["us"]
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    locality: str | None = None
+
+
+class ZipLookupErrorResponse(BaseModel):
+    detail: str
 
 
 class HotelAvailabilityResponse(BaseModel):

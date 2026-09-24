@@ -2,10 +2,11 @@
 
 ## Repository and commit
 Repository: https://github.com/dw477/expedia-replica
+
 Commit: df8632f
 
 ## Implementation
-Since part 2, multiple things in the front and backend have been either changed or implemented.
+With part 2, multiple things in the frontend and backend have either been changed or implemented.
 
 Starting with changes, the first is the upgrade to the user interface. The UI has been updated to reflect a polished website while retaining all backend functionality. The second change is to the structure of the repository. While similarly structured beforehand, the repository was changed to more strictly follow the Model-View-Controller frameowrk.
 

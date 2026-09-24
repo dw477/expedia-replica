@@ -115,6 +115,48 @@ connections. Both take an optional `database_path` for isolated testing.
 | `update_booking_status` | `booking_id`, `status`, optional path/`owner_user_id` | Updated `BookingHistoryEntry` |
 | `delete_booking` | `booking_id`, optional path/`owner_user_id` | `None` |
 
+### ZIP lookup controller
+
+`backend/controllers/geocoding.py` provides
+`lookup_zip(postcode: str) -> ZipLocation | None`. Input must be exactly five
+ASCII digits (preserving leading zeros); invalid input raises `ValueError` before
+any request. The View supports user-entered ZIP codes alongside the fixed
+`"16802"` demonstration.
+
+It uses the installed HTTPX client and
+[Geoapify forward geocoding](https://apidocs.geoapify.com/docs/geocoding/) with
+`postcode`, `type=postcode`, `filter=countrycode:us`, and `format=json`.
+`controllers/configuration.py` supplies the key exclusively to the backend request.
+Timeouts are 10 seconds per network phase; redirects are not followed.
+
+`backend/models/location.py` defines frozen `ZipLocation` with `postcode`,
+`country_code` (`us`), `latitude`, `longitude`, and optional `locality` (`None`
+when absent). Locality uses the first non-empty city/town/village. It has no price
+or Hotel relationship and is not persisted. Accept only an exact postcode,
+case-insensitive U.S. country code, `result_type=postcode`, and numeric, finite
+latitude/longitude within ±90/±180; booleans and numeric strings are rejected.
+Return the first acceptable result. Empty results, mismatches, and invalid
+candidate coordinates produce `None` if no acceptable candidate remains.
+
+Missing/unreadable configuration raises `ZipConfigurationError`, a subclass of
+`ZipLookupError`. Transport/timeouts, non-success HTTP responses, invalid JSON,
+or a missing/non-array `results` envelope raise `ZipLookupError` with a fixed
+safe message. No provider bodies or original exception chains are exposed.
+HTTPX request logs for Geoapify are suppressed because they include the API key
+in the URL. Mocked tests exercise request parameters, results, errors, and log
+redaction without using real credentials. The thin public demo route below calls
+this controller with fixed `"16802"`; `/api/zip-location` passes the validated
+`postcode` query parameter. Vue's `ZipLookupDemo.vue` uses `src/api/zip-location.js`
+and the shared request adapter for both its fixed demo button and ZIP form.
+The text input uses a numeric keyboard hint and five-digit validation while
+preserving leading zeros; submitting by button or Enter updates the same results
+display used by the demo. The panel clears earlier results/errors on each request,
+disables both buttons and the input while loading, and announces progress/results/errors.
+Its state is independent of hotel search. No frontend credentials or direct
+provider requests are used.
+
+### Search and booking controllers
+
 `controllers/search.py` matches a hotel-name substring after collapsing whitespace and
 case-folding in both the query and hotel name. Results are ordered by trip ID; blank input and no matches return
 `[]`. It initializes the database for the standalone CLI as well as API use and
@@ -258,6 +300,9 @@ and error mapping. Route handlers delegate business operations to controllers.
 
 | HTTP operation | Request | Successful response |
 | --- | --- | --- |
+| `GET /api/health` | None (public) | 200, `{status: "ok", geoapify: "key is configured"}` or `geoapify: "key is not configured"` |
+| `GET /api/demo/zip-location` | None (public); fixed ZIP `16802` | 200, `ZipLocationResponse`: postcode, country_code, latitude, longitude, nullable locality |
+| `GET /api/zip-location` | Required `postcode` query (public); exactly five ASCII digits | 200, same `ZipLocationResponse` as the demo |
 | `GET /api/stays` | Required `hotel_name` query; optional session | 200, current prices without recording a search |
 | `POST /api/stays` | Exactly `{hotel_name}`; optional session, CSRF header | 200, prices including this submission in the signed-in user's count |
 | `GET /api/users` | Valid session | 200, array containing only signed-in public identity |
@@ -269,6 +314,24 @@ and error mapping. Route handlers delegate business operations to controllers.
 | `POST /api/auth/login` | `{username, password}` | 200, public user identity plus session cookie |
 | `GET /api/auth/me` | Valid session | 200, public user identity |
 | `POST /api/auth/logout` | Optional session | 204, revoked session and cleared cookie |
+
+Both ZIP routes use `ZipLocationResponse` and `ZipLookupErrorResponse` from the JSON
+contract module. They map configuration errors to 503, unresolved ZIP to 404, and
+provider errors to 502 with safe `{detail}` messages, never exception text. The
+404 message identifies the validated requested ZIP. Success and error responses
+use `Cache-Control: no-store`. The demo accepts no lookup input; query parameters
+cannot override its fixed postcode. The entered-ZIP route requires a `postcode`
+query constrained by `ZipPostcode` in `models/contracts.py`; missing or invalid
+values return 422 before contacting the provider. Provider requests and domain
+validation remain in the geocoding controller.
+
+Health uses `HealthResponse` and `Cache-Control: no-store`. At startup,
+`controllers/configuration.py` loads `.env` from the project root derived from
+the helper's file path, preserving existing environment variables. It reads
+`GEOAPIFY_API_KEY` and retains only a boolean for health responses. Absent, empty,
+or whitespace-only values are not configured. Restart the backend after edits.
+Health reports API liveness and configuration presence, without checking key
+validity or calling Geoapify.
 
 Registration/login responses and `/api/auth/me` expose only `user_id` and `display_name`.
 Duplicate registration usernames are 409; invalid registration fields are 422.

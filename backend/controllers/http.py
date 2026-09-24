@@ -3,6 +3,7 @@
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
@@ -26,11 +27,17 @@ from backend.controllers.bookings import (
     list_booking_history,
     update_booking_status,
 )
+from backend.controllers.configuration import geoapify_key_is_configured
 from backend.controllers.database import (
     DEFAULT_DATA_DIRECTORY,
     DEFAULT_DATABASE_PATH,
     DatabaseController,
     DatabaseError,
+)
+from backend.controllers.geocoding import (
+    ZipConfigurationError,
+    ZipLookupError,
+    lookup_zip,
 )
 from backend.controllers.search import SearchDataError, search_available_stays
 from backend.models import User
@@ -38,11 +45,15 @@ from backend.models.contracts import (
     BookingCreateRequest,
     BookingResponse,
     BookingStatusRequest,
+    HealthResponse,
     HotelAvailabilityResponse,
     LoginRequest,
     RegistrationRequest,
     SearchRequest,
     UserResponse,
+    ZipLocationResponse,
+    ZipLookupErrorResponse,
+    ZipPostcode,
 )
 
 
@@ -61,12 +72,15 @@ def create_app(
         in {"1", "true", "yes"}
     )
     cookie_name = "expedia_session"
+    geoapify_configured = False
 
     def authentication() -> AuthenticationController:
         return AuthenticationController(database_path, data_directory)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        nonlocal geoapify_configured
+        geoapify_configured = geoapify_key_is_configured()
         try:
             DatabaseController(database_path).initialize(data_directory)
         except DatabaseError as error:
@@ -74,6 +88,57 @@ def create_app(
         yield
 
     application = FastAPI(title="Expedia Assignment API", lifespan=lifespan)
+
+    @application.get("/api/health", response_model=HealthResponse)
+    def health(response: Response) -> HealthResponse:
+        response.headers["Cache-Control"] = "no-store"
+        return HealthResponse(
+            status="ok",
+            geoapify=(
+                "key is configured" if geoapify_configured else "key is not configured"
+            ),
+        )
+
+    zip_error_responses = {
+        404: {"model": ZipLookupErrorResponse, "description": "ZIP unresolved"},
+        502: {"model": ZipLookupErrorResponse, "description": "Provider failure"},
+        503: {"model": ZipLookupErrorResponse, "description": "Configuration unavailable"},
+    }
+
+    def resolve_zip_location(postcode: str) -> ZipLocationResponse:
+        try:
+            location = lookup_zip(postcode)
+        except ZipConfigurationError:
+            raise HTTPException(
+                status_code=503,
+                detail="Geoapify configuration is unavailable. Configure GEOAPIFY_API_KEY and restart the backend.",
+            ) from None
+        except ZipLookupError:
+            raise HTTPException(
+                status_code=502, detail="The location provider request failed."
+            ) from None
+        if location is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No matching U.S. location was found for ZIP {postcode}.",
+            )
+        return ZipLocationResponse.model_validate(location)
+
+    @application.get(
+        "/api/demo/zip-location",
+        response_model=ZipLocationResponse,
+        responses=zip_error_responses,
+    )
+    def demo_zip_location() -> ZipLocationResponse:
+        return resolve_zip_location("16802")
+
+    @application.get(
+        "/api/zip-location",
+        response_model=ZipLocationResponse,
+        responses=zip_error_responses,
+    )
+    def zip_location(postcode: Annotated[ZipPostcode, Query()]) -> ZipLocationResponse:
+        return resolve_zip_location(postcode)
 
     @application.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, error: RequestValidationError):
@@ -105,7 +170,10 @@ def create_app(
                 )
         response = await call_next(request)
         if request.url.path.startswith(
-            ("/api/auth/", "/api/bookings", "/api/users", "/api/stays")
+            (
+                "/api/auth/", "/api/bookings", "/api/users", "/api/stays",
+                "/api/demo/zip-location", "/api/zip-location",
+            )
         ):
             response.headers["Cache-Control"] = "no-store"
         return response
