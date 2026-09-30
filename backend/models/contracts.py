@@ -35,6 +35,19 @@ class ZipLookupErrorResponse(BaseModel):
     detail: str
 
 
+class NearbyHotelResponse(BaseModel):
+    """A live hotel place near a ZIP point, without booking or price data."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    place_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    address: str | None
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    distance_m: int = Field(ge=0, le=5000)
+
+
 class HotelAvailabilityResponse(BaseModel):
     """Availability with this user's applicable nightly rate and derived total."""
 

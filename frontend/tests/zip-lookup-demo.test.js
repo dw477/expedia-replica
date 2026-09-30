@@ -20,6 +20,16 @@ const location = {
   postcode: '16802', country_code: 'us', locality: 'University Park',
   latitude: 40.8, longitude: -77.86,
 }
+const hotels = [
+  {
+    place_id: 'hotel-1', name: 'Scholar Hotel', address: '1 College Ave',
+    latitude: 40.801, longitude: -77.86, distance_m: 111,
+  },
+  {
+    place_id: 'hotel-2', name: 'Nittany Lion Inn', address: null,
+    latitude: 40.802, longitude: -77.861, distance_m: 222,
+  },
+]
 
 function mount(t) {
   const app = renderer.createApp({ ...ZipLookupDemo, render: () => null })
@@ -51,9 +61,10 @@ test('panel waits for a click and exposes the demo button and a labeled ZIP form
 test('request uses the backend adapter; loading clears old content and blocks repeat clicks', async (t) => {
   let finish
   const fetch = t.mock.method(globalThis, 'fetch', (url, options) => {
-    assert.equal(url, '/api/demo/zip-location')
     assert.equal(options.method ?? 'GET', 'GET')
     assert.equal(options.credentials, 'same-origin')
+    if (url === '/api/zip-hotels?postcode=16802') return Promise.resolve(Response.json(hotels))
+    assert.equal(url, '/api/demo/zip-location')
     return new Promise((resolve) => { finish = resolve })
   })
   const state = mount(t)
@@ -67,7 +78,7 @@ test('request uses the backend adapter; loading clears old content and blocks re
   assert.match(loadingHtml, /aria-busy="true"/)
   assert.match(loadingHtml, /<button[^>]* disabled/)
   assert.match(loadingHtml, /role="status"/)
-  assert.match(loadingHtml, /Looking up ZIP 16802…/)
+  assert.match(loadingHtml, /Looking up ZIP 16802 and nearby hotels…/)
   assert.doesNotMatch(loadingHtml, /University Park|Earlier error/)
   await state.lookUpZip('02108')
   assert.equal(fetch.mock.callCount(), 1)
@@ -75,7 +86,9 @@ test('request uses the backend adapter; loading clears old content and blocks re
   finish(Response.json(location))
   await pending
   assert.deepEqual(state.location, location)
+  assert.deepEqual(state.hotels, hotels)
   assert.equal(state.isLoading, false)
+  assert.equal(fetch.mock.callCount(), 2)
   const html = await render(state)
   for (const value of ['Postcode', '16802', 'Locality', 'University Park', 'Latitude', '40.8', 'Longitude', '-77.86']) {
     assert.ok(html.includes(value))
@@ -84,9 +97,9 @@ test('request uses the backend adapter; loading clears old content and blocks re
 })
 
 test('successful response can omit locality and preserves zero coordinates', async (t) => {
-  t.mock.method(globalThis, 'fetch', async () => Response.json({
-    ...location, locality: null, latitude: 0, longitude: 0,
-  }))
+  t.mock.method(globalThis, 'fetch', async (url) => url.startsWith('/api/zip-hotels')
+    ? Response.json([])
+    : Response.json({ ...location, locality: null, latitude: 0, longitude: 0 }))
   const state = mount(t)
   await state.lookUpZip()
   const html = await render(state)
@@ -97,9 +110,12 @@ test('successful response can omit locality and preserves zero coordinates', asy
 
 test('backend errors are displayed and retry clears the previous error', async (t) => {
   let succeed = false
-  t.mock.method(globalThis, 'fetch', async () => succeed
-    ? Response.json(location)
-    : Response.json({ detail: 'The location provider request failed.' }, { status: 502 }))
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    if (url.startsWith('/api/zip-hotels')) return Response.json([])
+    return succeed
+      ? Response.json(location)
+      : Response.json({ detail: 'The location provider request failed.' }, { status: 502 })
+  })
   const state = mount(t)
   state.location = location
   await state.lookUpZip()
@@ -133,9 +149,10 @@ test('entered ZIP preserves leading zeros and replaces the demo result in the sa
   let finish
   const enteredLocation = { ...location, postcode: '02108', locality: 'Boston' }
   const fetch = t.mock.method(globalThis, 'fetch', (url, options) => {
-    assert.equal(url, '/api/zip-location?postcode=02108')
     assert.equal(options.method ?? 'GET', 'GET')
     assert.equal(options.credentials, 'same-origin')
+    if (url === '/api/zip-hotels?postcode=02108') return Promise.resolve(Response.json(hotels))
+    assert.equal(url, '/api/zip-location?postcode=02108')
     return new Promise((resolve) => { finish = resolve })
   })
   const state = mount(t)
@@ -143,7 +160,7 @@ test('entered ZIP preserves leading zeros and replaces the demo result in the sa
   state.postcode = '02108'
   const pending = state.lookUpZip(state.postcode)
   const loadingHtml = await render(state)
-  assert.match(loadingHtml, /Looking up ZIP 02108…/)
+  assert.match(loadingHtml, /Looking up ZIP 02108 and nearby hotels…/)
   assert.equal((loadingHtml.match(/<button[^>]* disabled/g) ?? []).length, 2)
   assert.match(loadingHtml, /<input[^>]* disabled/)
   assert.doesNotMatch(loadingHtml, /University Park/)
@@ -151,6 +168,7 @@ test('entered ZIP preserves leading zeros and replaces the demo result in the sa
   assert.equal(fetch.mock.callCount(), 1)
   finish(Response.json(enteredLocation))
   await pending
+  assert.equal(fetch.mock.callCount(), 2)
   const html = await render(state)
   assert.equal((html.match(/<dl /g) ?? []).length, 1)
   assert.match(html, /Boston/)
@@ -178,10 +196,54 @@ test('entered ZIP provider errors allow retry and switching back to the demo', a
   assert.match(await render(state), /No matching U.S. location was found for ZIP 00000\./)
   assert.equal(state.isLoading, false)
   fetch.mock.mockImplementation(async (url) => {
-    assert.equal(url, '/api/demo/zip-location')
-    return Response.json(location)
+    if (url === '/api/demo/zip-location') return Response.json(location)
+    assert.equal(url, '/api/zip-hotels?postcode=16802')
+    return Response.json([])
   })
   await state.lookUpZip()
   assert.equal(state.error, '')
   assert.deepEqual(state.location, location)
+})
+
+test('nearby hotel list and map share the selected hotel', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (url) => url.startsWith('/api/zip-hotels')
+    ? Response.json(hotels)
+    : Response.json(location))
+  const state = mount(t)
+  await state.lookUpZip()
+  let html = await render(state)
+  assert.match(html, /Hotels within 5 km of ZIP 16802/)
+  assert.match(html, /Map of nearby hotels/)
+  assert.match(html, /Scholar Hotel/)
+  assert.match(html, /Nittany Lion Inn/)
+  assert.match(html, /2 hotels/)
+  assert.equal((html.match(/aria-pressed="false"/g) ?? []).length, 2)
+
+  state.selectHotel('hotel-2')
+  assert.equal(state.selectedPlaceId, 'hotel-2')
+  html = await render(state)
+  assert.match(html, /Selected Nittany Lion Inn/)
+  assert.equal((html.match(/aria-pressed="true"/g) ?? []).length, 1)
+})
+
+test('new ZIP clears prior hotels and selection; hotel errors keep the resolved location', async (t) => {
+  let failHotels = false
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    if (url.startsWith('/api/zip-hotels')) {
+      return failHotels
+        ? Response.json({ detail: 'The hotel provider request failed.' }, { status: 502 })
+        : Response.json(hotels)
+    }
+    return Response.json(location)
+  })
+  const state = mount(t)
+  await state.lookUpZip()
+  state.selectHotel('hotel-1')
+  failHotels = true
+  await state.lookUpZip()
+  assert.deepEqual(state.location, location)
+  assert.deepEqual(state.hotels, [])
+  assert.equal(state.selectedPlaceId, '')
+  assert.equal(state.hasLoadedHotels, false)
+  assert.match(await render(state), /The hotel provider request failed\./)
 })

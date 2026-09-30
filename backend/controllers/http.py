@@ -39,6 +39,11 @@ from backend.controllers.geocoding import (
     ZipLookupError,
     lookup_zip,
 )
+from backend.controllers.nearby_hotels import (
+    NearbyHotelConfigurationError,
+    NearbyHotelLookupError,
+    search_hotels_near_zip,
+)
 from backend.controllers.search import SearchDataError, search_available_stays
 from backend.models import User
 from backend.models.contracts import (
@@ -48,6 +53,7 @@ from backend.models.contracts import (
     HealthResponse,
     HotelAvailabilityResponse,
     LoginRequest,
+    NearbyHotelResponse,
     RegistrationRequest,
     SearchRequest,
     UserResponse,
@@ -140,6 +146,31 @@ def create_app(
     def zip_location(postcode: Annotated[ZipPostcode, Query()]) -> ZipLocationResponse:
         return resolve_zip_location(postcode)
 
+    @application.get(
+        "/api/zip-hotels",
+        response_model=list[NearbyHotelResponse],
+        responses=zip_error_responses,
+    )
+    def zip_hotels(postcode: Annotated[ZipPostcode, Query()]) -> list[NearbyHotelResponse]:
+        """List live hotels within 5 km of this ZIP's returned point."""
+        try:
+            hotels = search_hotels_near_zip(postcode)
+        except (ZipConfigurationError, NearbyHotelConfigurationError):
+            raise HTTPException(
+                status_code=503,
+                detail="Geoapify configuration is unavailable. Configure GEOAPIFY_API_KEY and restart the backend.",
+            ) from None
+        except (ZipLookupError, NearbyHotelLookupError):
+            raise HTTPException(
+                status_code=502, detail="The hotel provider request failed."
+            ) from None
+        if hotels is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No matching U.S. location was found for ZIP {postcode}.",
+            )
+        return [NearbyHotelResponse.model_validate(hotel) for hotel in hotels]
+
     @application.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, error: RequestValidationError):
         # Validation errors must never reflect submitted credentials back to clients.
@@ -173,6 +204,7 @@ def create_app(
             (
                 "/api/auth/", "/api/bookings", "/api/users", "/api/stays",
                 "/api/demo/zip-location", "/api/zip-location",
+                "/api/zip-hotels",
             )
         ):
             response.headers["Cache-Control"] = "no-store"

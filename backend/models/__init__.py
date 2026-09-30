@@ -2,6 +2,7 @@
 
 from backend.models.authentication import AuthSession, UserAccount
 from backend.models.entities import Booking, BookingStatus, Hotel, Trip, User
+from backend.models.nearby_hotel import NearbyHotel
 from backend.models.results import BookingHistoryEntry, HotelAvailability
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "User",
     "BookingHistoryEntry",
     "HotelAvailability",
+    "NearbyHotel",
 ]

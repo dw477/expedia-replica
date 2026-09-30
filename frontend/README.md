@@ -47,6 +47,12 @@ API-provided hotel, location, trip, date, night, and price information. The refe
 flights, bundle savings, ratings, and amenities are omitted because the API does
 not provide those fields.
 
+The ZIP panel also calls `GET /api/zip-hotels?postcode=...` after resolving the
+entered ZIP. It shows live hotel locations within 5 km in a list beside a Leaflet
+map; choosing a list item highlights and opens its map marker, and choosing a
+marker highlights the matching list item. The map uses OpenStreetMap tiles with
+visible attribution. These places do not include room prices or booking options.
+
 ## Checks
 
 ```sh
