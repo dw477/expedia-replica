@@ -33,6 +33,7 @@ from backend.controllers.database import (
     DEFAULT_DATABASE_PATH,
     DatabaseController,
     DatabaseError,
+    RecordNotFoundError,
 )
 from backend.controllers.geocoding import (
     ZipConfigurationError,
@@ -44,6 +45,9 @@ from backend.controllers.nearby_hotels import (
     NearbyHotelLookupError,
     search_hotels_near_zip,
 )
+from backend.controllers.local_hotels import LocalHotelsController
+from backend.models.local_hotel import HotelZipAssociation, LocalHotelResult, SavedHotel
+from backend.models.location import ZipLocation
 from backend.controllers.search import SearchDataError, search_available_stays
 from backend.models import User
 from backend.models.contracts import (
@@ -53,6 +57,10 @@ from backend.models.contracts import (
     HealthResponse,
     HotelAvailabilityResponse,
     LoginRequest,
+    LocalHotelSaveRequest,
+    LocalHotelDeleteRequest,
+    LocalHotelResponse,
+    DemoHotelNightResponse,
     NearbyHotelResponse,
     RegistrationRequest,
     SearchRequest,
@@ -171,6 +179,58 @@ def create_app(
             )
         return [NearbyHotelResponse.model_validate(hotel) for hotel in hotels]
 
+    def local_hotel_response(result: LocalHotelResult) -> LocalHotelResponse:
+        hotel = result.hotel
+        return LocalHotelResponse(
+            place_id=hotel.hotel_id, name=hotel.name, address=hotel.address,
+            latitude=hotel.latitude, longitude=hotel.longitude,
+            distance_m=result.association.distance_m,
+            location=ZipLocationResponse.model_validate(result.association.location),
+            demo_nights=[DemoHotelNightResponse.model_validate(night) for night in result.demo_nights],
+        )
+
+    @application.get("/api/local-hotels", response_model=list[LocalHotelResponse])
+    def local_hotels(postcode: Annotated[ZipPostcode, Query()]) -> list[LocalHotelResponse]:
+        try:
+            return [local_hotel_response(item) for item in
+                    LocalHotelsController(database_path).list_for_zip(postcode)]
+        except DatabaseError:
+            raise HTTPException(500, "Saved hotels could not be loaded. Please try again.") from None
+
+    @application.get("/api/local-hotels/ids", response_model=list[str])
+    def local_hotel_ids() -> list[str]:
+        try:
+            return LocalHotelsController(database_path).list_ids()
+        except DatabaseError:
+            raise HTTPException(500, "Saved hotel status could not be loaded. Please try again.") from None
+
+    @application.post("/api/local-hotels", response_model=LocalHotelResponse, status_code=201)
+    def save_local_hotel(payload: LocalHotelSaveRequest) -> LocalHotelResponse:
+        try:
+            hotel = SavedHotel(
+                payload.hotel.place_id, payload.hotel.name, payload.hotel.address,
+                payload.hotel.latitude, payload.hotel.longitude,
+            )
+            context = HotelZipAssociation(
+                hotel.hotel_id, ZipLocation(**payload.location.model_dump()), payload.hotel.distance_m,
+            )
+            return local_hotel_response(LocalHotelsController(database_path).save(hotel, context))
+        except ValueError:
+            raise HTTPException(422, "A valid hotel and searched ZIP location are required.") from None
+        except DatabaseError:
+            raise HTTPException(500, "The hotel could not be saved. Please try again.") from None
+
+    @application.delete("/api/local-hotels", status_code=204)
+    def remove_local_hotel(payload: LocalHotelDeleteRequest) -> Response:
+        # A JSON ID avoids URL decoding/normalization of opaque provider IDs.
+        try:
+            LocalHotelsController(database_path).remove(payload.place_id)
+        except RecordNotFoundError:
+            raise HTTPException(404, "Saved hotel was not found.") from None
+        except DatabaseError:
+            raise HTTPException(500, "The hotel could not be removed. Please try again.") from None
+        return Response(status_code=204)
+
     @application.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, error: RequestValidationError):
         # Validation errors must never reflect submitted credentials back to clients.
@@ -204,7 +264,7 @@ def create_app(
             (
                 "/api/auth/", "/api/bookings", "/api/users", "/api/stays",
                 "/api/demo/zip-location", "/api/zip-location",
-                "/api/zip-hotels",
+                "/api/zip-hotels", "/api/local-hotels",
             )
         ):
             response.headers["Cache-Control"] = "no-store"

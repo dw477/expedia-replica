@@ -216,3 +216,22 @@ node --test tests/*.test.js
 ```
 
 Do not commit real credentials, API keys, or local environment files.
+
+## Assignment 2 local hotel demo
+
+ZIP lookup checks saved hotels first. Matching local results use their stored ZIP
+point and show dated rates and rooms labeled **simulated classroom data**. They
+are only the saved subset, not a complete area listing. A successful empty local
+lookup falls back to the existing live API; a local error is shown without calling
+it. The fixed ZIP demonstration follows the same local-first flow.
+
+Use **Add to Local** beside a live hotel to save its exact provider ID and searched
+ZIP/location context. Database-backed status survives a browser refresh. Saves
+create five fictional nights, October 10–14, 2026 inclusive, at $100.00 and 20 rooms
+per night. Repeated saves preserve existing rates/inventory. **Remove from Local**
+removes that saved hotel, all its ZIP associations, and its demo nights atomically.
+This classroom storage is shared, independent of sign-in and Assignment 1 bookings.
+
+Startup additively applies schema version 5 to the same SQLite database; no reset,
+new dependencies, or new setup commands are needed. See `docs/design.md` for the
+local endpoint and storage contracts.

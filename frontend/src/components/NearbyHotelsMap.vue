@@ -29,7 +29,7 @@ function hotelIcon() {
 function popupContent(hotel) {
   const content = document.createElement('div')
   const name = document.createElement('strong')
-  name.textContent = hotel.name
+  name.textContent = hotel.name || 'Unnamed hotel'
   content.append(name)
   if (hotel.address) {
     const address = document.createElement('div')
@@ -86,7 +86,7 @@ function renderHotels() {
   for (const hotel of props.hotels) {
     const marker = leaflet.marker([hotel.latitude, hotel.longitude], {
       icon: hotelIcon(),
-      title: hotel.name,
+      title: hotel.name || 'Unnamed hotel',
       keyboard: true,
     }).addTo(map)
     marker.bindPopup(() => popupContent(hotel), {

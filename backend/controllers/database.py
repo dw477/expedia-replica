@@ -22,6 +22,8 @@ from backend.models import AuthSession, Booking, Hotel, Trip, User, UserAccount
 from backend.models.authentication import USER_ACCOUNT_COLUMNS
 from backend.models.entities import validate_nightly_rate
 from backend.models.schema import BOOKING_RATE_MIGRATION, SCHEMA_STATEMENTS
+from backend.models.local_hotel import DemoHotelNight, HotelZipAssociation, LocalHotelResult, SavedHotel
+from backend.models.location import ZipLocation, validate_postcode
 from backend.models.search import SearchHistory, SearchQueryCount
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -92,7 +94,7 @@ def initialize_database(
             )
 
         connection.execute(
-            "INSERT INTO app_metadata(key, value) VALUES ('schema_version', '3') "
+            "INSERT INTO app_metadata(key, value) VALUES ('schema_version', '5') "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         )
         with _account_file_lock(Path(data_directory) / "users.csv"):
@@ -406,6 +408,85 @@ class DatabaseController:
 
     def initialize(self, data_directory: str | Path = DEFAULT_DATA_DIRECTORY) -> bool:
         return initialize_database(self.database_path, data_directory)
+
+    def save_local_hotel(
+        self, hotel: SavedHotel, association: HotelZipAssociation,
+        stay_dates: tuple[date, ...],
+    ) -> None:
+        """Insert only missing rows; callers group this with reads in a transaction."""
+        if hotel.hotel_id != association.hotel_id:
+            raise ValueError("Hotel and association provider IDs must match")
+        if any(type(day) is not date for day in stay_dates):
+            raise ValueError("Stay dates must be date objects")
+        with self._connection(write=True) as connection:
+            connection.execute(
+                "INSERT INTO saved_hotels(hotel_id, name, address, latitude, longitude) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(hotel_id) DO NOTHING",
+                (hotel.hotel_id, hotel.name, hotel.address, hotel.latitude, hotel.longitude),
+            )
+            location = association.location
+            connection.execute(
+                "INSERT INTO saved_hotel_zip_locations "
+                "(hotel_id, postcode, country_code, latitude, longitude, locality, distance_m) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(hotel_id, postcode) DO NOTHING",
+                (hotel.hotel_id, location.postcode, location.country_code,
+                 location.latitude, location.longitude, location.locality, association.distance_m),
+            )
+            # Omit rate/inventory columns to use the schema's fictional defaults.
+            connection.executemany(
+                "INSERT INTO demo_hotel_nights(hotel_id, stay_date) VALUES (?, ?) "
+                "ON CONFLICT(hotel_id, stay_date) DO NOTHING",
+                [(hotel.hotel_id, day.isoformat()) for day in stay_dates],
+            )
+
+    def list_saved_hotel_ids(self) -> list[str]:
+        with self._connection() as connection:
+            return [row["hotel_id"] for row in connection.execute(
+                "SELECT hotel_id FROM saved_hotels ORDER BY hotel_id"
+            )]
+
+    def list_local_hotels(self, postcode: str) -> list[LocalHotelResult]:
+        validate_postcode(postcode)
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT h.*, z.country_code, z.latitude AS zip_latitude, "
+                "z.longitude AS zip_longitude, z.locality, z.distance_m "
+                "FROM saved_hotels h JOIN saved_hotel_zip_locations z "
+                "ON h.hotel_id = z.hotel_id WHERE z.postcode = ? "
+                "ORDER BY z.distance_m, h.name, h.hotel_id", (postcode,),
+            ).fetchall()
+            results = []
+            for row in rows:
+                hotel = SavedHotel(row["hotel_id"], row["name"], row["address"],
+                                   row["latitude"], row["longitude"])
+                association = HotelZipAssociation(
+                    hotel.hotel_id,
+                    ZipLocation(postcode, row["country_code"], row["zip_latitude"],
+                                row["zip_longitude"], row["locality"]),
+                    row["distance_m"],
+                )
+                nights = tuple(DemoHotelNight(
+                    hotel.hotel_id, date.fromisoformat(night["stay_date"]),
+                    night["nightly_rate_cents"], night["rooms_available"],
+                ) for night in connection.execute(
+                    "SELECT stay_date, nightly_rate_cents, rooms_available "
+                    "FROM demo_hotel_nights WHERE hotel_id = ? ORDER BY stay_date",
+                    (hotel.hotel_id,),
+                ))
+                results.append(LocalHotelResult(hotel, association, nights))
+            return results
+
+    def remove_local_hotel(self, hotel_id: str) -> None:
+        """Delete dependent demo rows and all ZIP contexts atomically."""
+        with self._connection(write=True) as connection:
+            if connection.execute(
+                "SELECT 1 FROM saved_hotels WHERE hotel_id = ?", (hotel_id,),
+            ).fetchone() is None:
+                raise RecordNotFoundError("Saved hotel was not found")
+            connection.execute("DELETE FROM demo_hotel_nights WHERE hotel_id = ?", (hotel_id,))
+            connection.execute("DELETE FROM saved_hotel_zip_locations WHERE hotel_id = ?", (hotel_id,))
+            connection.execute("DELETE FROM saved_hotels WHERE hotel_id = ?", (hotel_id,))
 
     def list_search_counts(
         self, user_id: str, start: int, end: int

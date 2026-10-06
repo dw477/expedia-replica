@@ -48,6 +48,66 @@ class NearbyHotelResponse(BaseModel):
     distance_m: int = Field(ge=0, le=5000)
 
 
+class LocalHotelFields(BaseModel):
+    """Provider identity is never trimmed, case-folded, or converted to an A1 ID."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    place_id: str = Field(min_length=1)
+    name: str | None = None
+    address: str | None = None
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False, strict=True)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False, strict=True)
+    distance_m: int = Field(ge=0, le=5000, strict=True)
+
+    @field_validator("place_id")
+    @classmethod
+    def nonblank_provider_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Provider ID must be non-empty text")
+        return value
+
+
+class LocalZipContextRequest(ZipLocationResponse):
+    model_config = ConfigDict(extra="forbid")
+
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False, strict=True)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False, strict=True)
+
+
+class LocalHotelSaveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hotel: LocalHotelFields
+    location: LocalZipContextRequest
+
+
+class LocalHotelDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    place_id: str = Field(min_length=1)
+
+    @field_validator("place_id")
+    @classmethod
+    def nonblank_provider_id(cls, value: str) -> str:
+        return LocalHotelFields.nonblank_provider_id(value)
+
+
+class DemoHotelNightResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    stay_date: date
+    nightly_rate_usd: Decimal
+    rooms_available: int = Field(ge=0)
+
+
+class LocalHotelResponse(LocalHotelFields):
+    """Stored search context and fictional nights, separate from the frozen API."""
+
+    location: ZipLocationResponse
+    demo_nights: list[DemoHotelNightResponse]
+
+
 class HotelAvailabilityResponse(BaseModel):
     """Availability with this user's applicable nightly rate and derived total."""
 

@@ -405,3 +405,79 @@ currently offers cancellation and deletion only. Registration's file lock uses
 POSIX `fcntl`; hosting must support it and provide writable persistent CSV and
 SQLite storage. HTTPS hosting also needs secure cookies and one browser origin
 for the View and API.
+
+## Assignment 2 Part 2 storage
+
+Schema version 4 additively creates `saved_hotels` and `demo_hotel_nights` during
+normal database initialization, on both existing and fresh databases. Repeated
+initialization preserves all rows; Assignment 1 tables and CSV imports are unchanged.
+No API or frontend contract changes, automatic API saves, or demo-night generation
+are introduced in this step. Both new tables start empty.
+
+The frozen nearby hotel response maps `place_id` to `saved_hotels.hotel_id`
+(verbatim text, case-sensitive primary key); `name`, `address`, `latitude`, and
+`longitude` map to identically named columns. Storage allows NULL names and
+addresses when unavailable. The existing Part 1 filtering and response behavior
+remain unchanged. Coordinates are required numbers within latitude ±90 and
+longitude ±180. The provider ID is independent of Assignment 1 hotel IDs.
+
+`demo_hotel_nights` references `saved_hotels.hotel_id`, restricts parent deletion,
+and has a composite primary key `(hotel_id, stay_date)`. Dates must be valid
+calendar dates in `YYYY-MM-DD` format. Rates and room counts must be nonnegative
+integers and default to 10000 cents ($100.00) and 20 rooms. These are fictional
+classroom defaults, never provider-supplied pricing or availability. SQLite
+foreign-key enforcement is enabled by `connect_database`; DB Explorer connections
+must also enable `PRAGMA foreign_keys = ON` when writing.
+
+### Local hotel workflows (schema version 5)
+
+The Part 1 provider endpoints and JSON fields remain frozen. Local storage now
+adds `saved_hotel_zip_locations`, keyed by hotel ID and five-digit postcode, with
+foreign-key deletion restricted. It stores the searched U.S. ZIP's latitude,
+longitude, optional locality, and the returned hotel distance separately from the
+hotel's own coordinates. It permits one hotel to be associated with multiple ZIPs.
+
+`models/local_hotel.py` defines immutable SavedHotel, HotelZipAssociation,
+DemoHotelNight, and LocalHotelResult. `controllers/local_hotels.py` owns workflows
+through public typed database-controller methods. Save runs in a write transaction,
+inserting absent rows only, including all five dates October 10–14, 2026 inclusive.
+Default rates and room counts remain 10000 cents and 20. Existing hotel metadata,
+ZIP contexts, rates, and availability are preserved on repeated saves. Removal
+explicitly deletes all associated ZIP and night rows before the hotel in one
+transaction; a failure rolls everything back. ZIP reads use a consistent snapshot.
+Assignment 1 records and CSV files are untouched.
+
+The additional public endpoints are:
+
+- `GET /api/local-hotels?postcode=02108`: array of stored provider-shaped hotel
+  fields plus `location` (the ZIP response schema) and `demo_nights` (ISO date,
+  decimal-string nightly_rate_usd, nonnegative integer rooms_available). Ordered
+  by stored distance, name, then exact provider ID. No matches returns `[]`.
+- `GET /api/local-hotels/ids`: sorted array of all exact saved provider IDs,
+  including hotels saved under other ZIPs or without ZIP associations.
+- `POST /api/local-hotels`: `{hotel, location}`; hotel fields are place_id, nullable
+  name/address, latitude/longitude, and distance_m. Location includes postcode,
+  country_code="us", ZIP latitude/longitude, and optional locality. Returns 201
+  with the stored result, including on an idempotent repeated save. Unknown fields,
+  submitted rates/inventory, invalid coordinates, distances, or ZIPs return 422.
+- `DELETE /api/local-hotels`: `{place_id}` in the JSON body preserves opaque IDs
+  without URL normalization. Returns 204 with no body, or 404 if absent.
+
+Schemas remain sourced from `models/contracts.py` and `/openapi.json`. Every local
+response uses `Cache-Control: no-store`; write requests require the existing
+X-Requested-With header. Storage failures return fixed safe 500 messages.
+The shared classroom demo intentionally does not require authentication.
+
+The View requests local hotels first. A local match displays the stored center,
+local hotels, dated simulated rates and room counts, labeled "Saved locally" and
+explicitly described as an incomplete saved subset. A successful empty result
+refreshes global saved IDs and then uses the existing ZIP and hotel API routes,
+labeled "API results". Local lookup/status errors do not trigger provider fallback.
+No requests run automatically on mount; re-entering a ZIP after refresh reads the
+database. Add/Remove buttons are siblings of the accessible card selection button.
+ZIP controls are blocked during pending mutations, and state changes only after
+successful writes. Removing a local result removes its card/marker; removing an
+API result's saved copy keeps its API card and selection.
+
+The earlier Part 2 storage-only milestone started with empty tables; these new
+workflows now populate them only when the user explicitly saves a hotel.

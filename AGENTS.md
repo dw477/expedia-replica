@@ -234,3 +234,41 @@ These rules apply throughout the repository.
   credential/session storage failures are 500; missing CSRF headers are 403.
 - The View must clear private booking data on sign-out or session expiry and restore
   the current session on page load. It must not let users choose a different owner.
+
+## Assignment 2 Local Hotel Contracts
+
+- Preserve the Part 1 `/api/zip-hotels`, ZIP lookup schemas, provider search, and
+  list/map selection. Local storage uses separate schemas/routes; it never writes
+  Assignment 1 hotels, trips, bookings, users, or supplied CSVs.
+- `models/local_hotel.py` owns immutable `SavedHotel`, `HotelZipAssociation`,
+  `DemoHotelNight`, and `LocalHotelResult`. Map API `place_id` verbatim to the
+  saved hotel's text primary key. Nullable name/address remain nullable.
+- Schema version 5 adds `saved_hotel_zip_locations` keyed by `(hotel_id, postcode)`
+  with a restricted hotel FK, ZIP point/country/locality, and returned distance.
+  Store the searched ZIP context independently of hotel coordinates. Migrations
+  are additive and repeatable. Only the database controller issues SQL.
+- `LocalHotelsController.save(hotel, association) -> LocalHotelResult` atomically
+  inserts only missing hotel/association rows and the five inclusive dates
+  2026-10-10 through 2026-10-14, using schema defaults 10000 cents and 20 rooms.
+  These are simulated classroom data. Repeated saves never overwrite rates,
+  inventory, hotel fields, or existing ZIP contexts. `list_for_zip(postcode)`
+  returns typed local results ordered by distance/name/provider ID using a read
+  snapshot; `list_ids()` returns all exact saved IDs; `remove(hotel_id)` deletes
+  the hotel, all ZIP associations, and all demo nights in one write transaction.
+- Public `GET /api/local-hotels?postcode=02108` returns an array with provider
+  fields plus stored `location` and dated `demo_nights` (decimal-string
+  `nightly_rate_usd`, integer `rooms_available`). `GET /api/local-hotels/ids`
+  returns a string array. `POST /api/local-hotels` accepts exactly `{hotel,
+  location}`, with only provider fields in `hotel`, and returns 201 with the
+  stored result. No submitted prices/inventory are accepted.
+  `DELETE /api/local-hotels` accepts exactly `{place_id}` and returns 204;
+  JSON keeps opaque IDs out of URL normalization. Missing records return 404,
+  invalid inputs 422, storage failures sanitized 500. All responses use no-store;
+  mutations require the existing CSRF header. This is shared classroom storage.
+- ZIP search first requests local hotels, uses stored location and demo values on
+  a match, and only falls back to Part 1 after a successful empty local result.
+  Local failures stop lookup. Before showing API cards, refresh global saved IDs
+  from the database. Mark saved/removed only after success; prevent duplicate
+  pending mutations and ZIP changes during a mutation. Keep selection buttons
+  separate from Add/Remove. Label local results as a saved subset, never a complete
+  area listing, and label all rates/rooms as simulated classroom data.

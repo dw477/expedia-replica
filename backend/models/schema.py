@@ -4,6 +4,59 @@
 # created without destructive migrations so an existing development database keeps
 # application changes made after the starter CSVs are imported.
 SCHEMA_STATEMENTS = (
+    # Provider place_id is stored verbatim as hotel_id; these are separate from
+    # Assignment 1 hotels. Rates and inventory below are classroom demo data.
+    """
+    CREATE TABLE IF NOT EXISTS saved_hotels (
+        hotel_id TEXT NOT NULL PRIMARY KEY,
+        name TEXT,
+        address TEXT,
+        latitude REAL NOT NULL CHECK (
+            typeof(latitude) IN ('integer', 'real') AND latitude BETWEEN -90 AND 90
+        ),
+        longitude REAL NOT NULL CHECK (
+            typeof(longitude) IN ('integer', 'real') AND longitude BETWEEN -180 AND 180
+        )
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS demo_hotel_nights (
+        hotel_id TEXT NOT NULL REFERENCES saved_hotels(hotel_id) ON DELETE RESTRICT,
+        stay_date TEXT NOT NULL CHECK (
+            stay_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+            AND date(stay_date, '+0 days') IS NOT NULL
+            AND date(stay_date, '+0 days') = stay_date
+        ),
+        nightly_rate_cents INTEGER NOT NULL DEFAULT 10000 CHECK (
+            typeof(nightly_rate_cents) = 'integer' AND nightly_rate_cents >= 0
+        ),
+        rooms_available INTEGER NOT NULL DEFAULT 20 CHECK (
+            typeof(rooms_available) = 'integer' AND rooms_available >= 0
+        ),
+        PRIMARY KEY (hotel_id, stay_date)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS saved_hotel_zip_locations (
+        hotel_id TEXT NOT NULL REFERENCES saved_hotels(hotel_id) ON DELETE RESTRICT,
+        postcode TEXT NOT NULL CHECK (
+            postcode GLOB '[0-9][0-9][0-9][0-9][0-9]'
+        ),
+        country_code TEXT NOT NULL CHECK (country_code = 'us'),
+        latitude REAL NOT NULL CHECK (
+            typeof(latitude) IN ('integer', 'real') AND latitude BETWEEN -90 AND 90
+        ),
+        longitude REAL NOT NULL CHECK (
+            typeof(longitude) IN ('integer', 'real') AND longitude BETWEEN -180 AND 180
+        ),
+        locality TEXT,
+        distance_m INTEGER NOT NULL CHECK (
+            typeof(distance_m) = 'integer' AND distance_m BETWEEN 0 AND 5000
+        ),
+        PRIMARY KEY (hotel_id, postcode)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_saved_hotel_zip ON saved_hotel_zip_locations(postcode)",
     """
     CREATE TABLE IF NOT EXISTS app_metadata (
         key TEXT PRIMARY KEY,
