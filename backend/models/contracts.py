@@ -4,13 +4,84 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, UUID4, field_validator
 
 from backend.models.authentication import (
     USERNAME_PATTERN,
     validate_registration_password,
 )
 from backend.models.entities import BookingStatus
+from backend.models.chat import (
+    MAX_CHAT_MESSAGES,
+    MAX_CHAT_MESSAGE_LENGTH,
+    MAX_CHAT_SUGGESTIONS,
+    MAX_CHAT_SUGGESTION_LENGTH,
+    ChatConversation,
+    ChatMessage,
+    ChatReply,
+    ChatRole,
+)
+
+
+class ChatMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    role: ChatRole
+    content: str = Field(min_length=1, max_length=MAX_CHAT_MESSAGE_LENGTH)
+
+    @field_validator("content")
+    @classmethod
+    def nonblank_content(cls, value: str) -> str:
+        return ChatMessage("user", value).content
+
+
+class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    messages: list[ChatMessageRequest] = Field(min_length=1, max_length=MAX_CHAT_MESSAGES)
+    conversation_id: UUID4 | None = Field(
+        default=None,
+        description="Page-memory UUID for grouping durable messages and workflow records; not an access token.",
+    )
+
+    @field_validator("messages")
+    @classmethod
+    def valid_conversation(cls, value: list[ChatMessageRequest]) -> list[ChatMessageRequest]:
+        ChatConversation(
+            tuple(ChatMessage(message.role, message.content) for message in value)
+        )
+        return value
+
+
+class ChatResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    reply: str = Field(min_length=1, max_length=MAX_CHAT_MESSAGE_LENGTH)
+    suggestions: list[Annotated[str, Field(min_length=1, max_length=MAX_CHAT_SUGGESTION_LENGTH)]] = Field(
+        max_length=MAX_CHAT_SUGGESTIONS,
+        description="Distinct follow-up questions based on the latest user question and this reply.",
+    )
+
+    @field_validator("reply")
+    @classmethod
+    def valid_reply(cls, value: str) -> str:
+        return ChatMessage("assistant", value).content
+
+    @field_validator("suggestions")
+    @classmethod
+    def valid_suggestions(cls, value: list[str]) -> list[str]:
+        return list(ChatReply("Validated reply", tuple(value)).suggestions)
+
+
+class ChatErrorResponse(BaseModel):
+    detail: str = Field(
+        description="Fixed safe error message; provider outages and timeouts have distinct explanations.",
+        examples=[
+            "Gemini is temporarily unavailable. Please try again in a moment.",
+            "Gemini took too long to reply. Please try again.",
+            "The travel assistant could not reply. Please try again.",
+        ],
+    )
 
 
 class HealthResponse(BaseModel):

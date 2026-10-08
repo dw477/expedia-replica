@@ -481,3 +481,160 @@ API result's saved copy keeps its API card and selection.
 
 The earlier Part 2 storage-only milestone started with empty tables; these new
 workflows now populate them only when the user explicitly saves a hotel.
+
+## Hotel assistant chat (schema version 6)
+
+`models/chat.py` defines immutable `ChatMessage(role, content)`,
+`ChatConversation(messages)`, and `ChatReply(reply, suggestions=())` results. Messages are trimmed,
+nonblank plain text with only user/assistant roles, alternating starting and ending
+with user. Limits remain 8,000 characters per message, 1–21 messages, and 32,000
+characters total. Invalid inputs raise `ValueError` before writes/provider access.
+Suggestions are immutable tuples of up to three distinct, trimmed nonblank strings
+of at most 160 characters. They are optional follow-up actions, not chat messages.
+
+`prompts/hotel-assistant.md` is the separate LLM instruction file; AGENTS.md supplies
+repository rules only. `controllers/chat_prompt.py` reads it using its own absolute
+project path once during FastAPI lifespan startup, independent of the working
+directory. Missing, unreadable, or empty instructions stop startup with a safe error.
+The loaded text is included in both provider calls. Restart the backend after
+Markdown prompt edits; Python reload does not guarantee detection.
+
+The prompt documents the actual columns from `models/schema.py`:
+
+| Relation | Columns |
+| --- | --- |
+| saved_hotels | hotel_id, name (nullable), address (nullable), latitude, longitude |
+| saved_hotel_zip_locations | hotel_id, postcode, country_code, latitude, longitude, locality (nullable), distance_m |
+| demo_hotel_nights | hotel_id, stay_date, nightly_rate_cents, rooms_available |
+
+The first JOIN matches `saved_hotels.hotel_id` to
+`saved_hotel_zip_locations.hotel_id` and filters the five-digit `postcode` text,
+preserving leading zeros. Associations describe the searched ZIP, independently
+of hotel coordinates. The second JOIN matches `demo_hotel_nights.hotel_id` to the
+hotel ID to retrieve dated rates and room counts. Queries apply requested dates
+and minimum rooms and order by numeric price with stable hotel-ID ties. Cents
+convert using `/ 100.0`, displayed as dollars with two decimals. Check-in is
+inclusive and checkout exclusive; eligible stays require records and sufficient
+rooms on every night. Missing records mean unknown availability, not zero rooms.
+LEFT JOIN date conditions belong in ON when reporting missing records. Prompt
+examples cover single nights and complete multi-night stays. Results represent
+only the saved subset; rates and rooms are always simulated classroom data.
+
+`controllers/chat.py` exposes
+`reply_to_chat(messages: tuple[ChatMessage, ...], *, database_path=DEFAULT_DATABASE_PATH,
+conversation_id=None, prompt=None) -> ChatReply`. Direct callers initialize the
+database first; HTTP startup performs initialization. Each turn:
+
+1. Commits the current user message (not replayed browser context).
+2. Sends the conversation and loaded schema/purpose instructions to Gemini to
+   propose exactly one SELECT query without Markdown.
+3. Commits the generated SQL, then validates it without execution.
+4. Commits the exact bounded SQL to be submitted, executes it on a separate guarded
+   read-only connection, and commits a summary (columns, row count, empty/truncated).
+5. Sends the original question and retrieved rows to Gemini in a second request,
+   with instructions to answer only from records, acknowledge empty/truncated
+   results, explain unknown dates, and label simulated data. This request also
+   generates follow-up questions tailored to the latest question and its answer.
+6. Validates the structured answer/suggestions envelope, commits the final
+   assistant message, and returns the answer and suggested actions to the View.
+
+No database transaction spans a provider call. Each workflow owns/closes one
+`google-genai` client. Both text-only Interactions requests use `store=False`, a
+30-second timeout, no automatic retries, and a 1,024-token output limit.
+User/assistant context maps to user_input/model_output steps; retrieved rows are
+JSON in a user_input step, never system instructions. The SDK Interactions retry
+configuration is disabled explicitly. Only completed, nonblank, bounded text is
+accepted. Fake HTTP transports verify serialization and failure behavior.
+The second request sets response_format to type=text, mime_type=application/json with the
+ChatResponse JSON schema from models/contracts.py. The first still returns SQL
+text. No third request is added. The backend rejects malformed JSON, extra fields,
+blank/duplicate/oversized suggestions, or invalid answers with a safe provider
+error, preserving previous workflow logs. Only reply text is saved as the assistant
+message; suggested actions are not inserted into conversation history.
+
+`models/hotel_query.py` defines the narrowly scoped immutable `HotelQuery(sql)`
+and `HotelQueryResult(columns, rows, truncated)` contracts. This is the sole SQL
+input exception to typed controller boundaries. Only the database controller
+opens SQLite or issues SQL. `validate_hotel_query(query) -> HotelQuery` uses
+SQLite EXPLAIN to compile both the standalone query and its outer LIMIT wrapper
+without execution. This rejects multiple statements and attempts to escape the
+wrapper. `execute_hotel_query(query) -> HotelQueryResult` revalidates on its own
+handle. Both use mode=ro, query_only, trusted_schema off, and a default-deny
+SQLite authorizer for every nested read/function. Only the three hotel tables and
+the documented ordinary scalar/aggregate functions are permitted. Writes, DDL,
+PRAGMA, ATTACH, extension/file access, recursive CTEs, metadata/private tables,
+and table-valued functions are blocked. Nonrecursive WITH is supported.
+
+Queries have an 8,000-character input limit, 100 returned rows (101 fetched to detect
+truncation), a 32,000-character serialized result bound, and a one-second deadline
+enforced by SQLite's progress handler and bounded lock waiting. SQLite also limits
+SQL/column/expression/value/bytecode sizes. Results are immutable JSON scalars,
+never SQLite rows. Rejected proposals raise `HotelQueryRejectedError`; deadline
+failures raise `HotelQueryTimeoutError`. The chat controller maps both to safe
+`ChatQueryError`. Storage failures map to `ChatDataError`.
+
+The additive schema version 6 creates `conversation_history`:
+
+| Column | Contract |
+| --- | --- |
+| message_id | Unique version-4 UUID text primary key |
+| conversation_id | Version-4 UUID grouping a page-memory chat, indexed |
+| timestamp | Nonnegative Unix milliseconds (UTC) |
+| role | user, assistant, or system |
+| content | Nonblank text, at most 16,000 characters |
+| record_type | message, generated_sql, executed_sql, result_summary, or error |
+
+`models/conversation.py` validates immutable `ConversationRecord` objects.
+`DatabaseController.append_conversation_record(record) -> None` commits each
+trusted write independently of hotel reads. User/assistant messages have
+record_type=message; workflow records use role=system with distinct record types.
+Executed SQL means the validated statement submitted for execution, including its
+outer LIMIT; a subsequent timeout/error records failure, not successful completion.
+Error records contain only stage and fixed safe classification, never raw exceptions,
+URLs, keys, or provider metadata. Earlier records survive later failures. An audit
+write failure stops the workflow. Internal `list_conversation_records(id)` returns
+records in insertion order; no public transcript endpoint exists. The read-only
+hotel authorizer cannot access this table. Reinitialization preserves all records,
+local data, and Assignment 1 tables/CSV data.
+
+Configuration remains backend-only `GEMINI_API_KEY` and optional `GEMINI_MODEL`,
+loaded from root .env with process overrides. Missing/blank keys are unconfigured;
+the default is gemini-3.8-flash. Restart after edits. Health is unchanged.
+
+Public `POST /api/chat` accepts messages plus an optional version-4 UUID
+conversation_id; other fields, system roles, and invalid conversations return 422.
+The source of truth remains ChatRequest/ChatMessageRequest/ChatResponse/
+ChatErrorResponse in models/contracts.py and /openapi.json. Success is 200 with
+exactly `{reply, suggestions}`. Suggestions serialize as an array, including empty
+arrays, with at most three strings of at most 160 characters. Missing
+X-Requested-With: XMLHttpRequest is 403; configuration is
+503; storage is sanitized 500; provider and rejected-query failures are sanitized
+502. Provider 503 and wrapped transport timeouts retain their distinct fixed safe
+messages. Classification uses numeric statuses and exception types, not raw text.
+All responses use no-store. Chat is public and can read only shared classroom
+hotels, never identities, credentials, sessions, or Assignment 1 bookings.
+
+The View's API adapter bounds context to 10 recent complete exchanges plus the
+current question. ChatAssistant.vue preserves its accessible nonmodal popup,
+plain-text rendering, Enter/Shift+Enter behavior, focus return on close/Escape,
+loading, retry, and reset. Failed exchanges restore the draft and are excluded
+from subsequent context. A page-memory UUID groups turns and retries; New chat
+creates a new UUID and clears the local transcript, without deleting server logs.
+Starter questions appear before the first exchange. Successful answers replace
+them with generated follow-ups below the transcript. While busy they are hidden;
+failed turns and closing the popup preserve the previous successful set. New chat
+restores the starters. The API adapter validates suggestions; clicking one sends
+that text through the usual bounded conversation flow. The View renders both
+answers and suggestions as escaped text. The introductory help paragraph and
+keyboard/storage footer are removed as requested, along with their accessibility
+references; errors remain associated with the composer. Server persistence and
+simulated rates remain documented in README and in the assistant's answer rules.
+No browser storage is used. The frontend receives answers and suggested questions,
+not SQL or internal logs.
+
+Tests cover actual prompt columns/JOIN examples, ZIP/date/room filtering, whole
+stays and missing nights, numeric conversion/order, authorization bypasses, row/size/
+time limits, incremental durable logs, safe errors, two-request SDK serialization,
+conversation grouping/reset, generated suggestion validation/refresh/retry/reset,
+removed-text accessibility references, startup prompt snapshots, and additive initialization.
+Tests use temporary databases and fake providers without real keys or live LLM calls.

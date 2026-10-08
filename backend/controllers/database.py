@@ -9,8 +9,10 @@ import io
 import json
 import logging
 import os
+import re
 import sqlite3
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import fields
 from datetime import date
@@ -25,6 +27,13 @@ from backend.models.schema import BOOKING_RATE_MIGRATION, SCHEMA_STATEMENTS
 from backend.models.local_hotel import DemoHotelNight, HotelZipAssociation, LocalHotelResult, SavedHotel
 from backend.models.location import ZipLocation, validate_postcode
 from backend.models.search import SearchHistory, SearchQueryCount
+from backend.models.conversation import ConversationRecord, validate_conversation_id
+from backend.models.hotel_query import (
+    MAX_HOTEL_QUERY_ROWS,
+    MAX_HOTEL_RESULT_CHARACTERS,
+    HotelQuery,
+    HotelQueryResult,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIRECTORY = PROJECT_ROOT / "data"
@@ -37,6 +46,22 @@ DEFAULT_DATABASE_PATH = Path(
 
 class DatabaseError(RuntimeError):
     """Raised when the application database cannot be prepared or queried."""
+
+
+class HotelQueryRejectedError(ValueError):
+    """The generated proposal is not a permitted bounded hotel SELECT."""
+
+
+class HotelQueryTimeoutError(HotelQueryRejectedError):
+    """A hotel read exceeded its execution deadline."""
+
+
+HOTEL_QUERY_TIMEOUT_SECONDS = 1.0
+HOTEL_QUERY_TABLES = frozenset({"saved_hotels", "saved_hotel_zip_locations", "demo_hotel_nights"})
+HOTEL_QUERY_FUNCTIONS = frozenset({
+    "count", "sum", "avg", "min", "max", "round", "abs", "coalesce", "ifnull",
+    "nullif", "lower", "upper", "length", "date", "julianday",
+})
 
 
 def connect_database(
@@ -94,7 +119,7 @@ def initialize_database(
             )
 
         connection.execute(
-            "INSERT INTO app_metadata(key, value) VALUES ('schema_version', '5') "
+            "INSERT INTO app_metadata(key, value) VALUES ('schema_version', '6') "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         )
         with _account_file_lock(Path(data_directory) / "users.csv"):
@@ -408,6 +433,136 @@ class DatabaseController:
 
     def initialize(self, data_directory: str | Path = DEFAULT_DATA_DIRECTORY) -> bool:
         return initialize_database(self.database_path, data_directory)
+
+    def append_conversation_record(self, record: ConversationRecord) -> None:
+        """Commit one workflow step independently of untrusted hotel reads."""
+        if self._active_connection is not None:
+            raise DatabaseError("Conversation writes require their own transaction")
+        with self._connection(write=True) as connection:
+            connection.execute(
+                "INSERT INTO conversation_history "
+                "(message_id, conversation_id, timestamp, role, content, record_type) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (record.message_id, record.conversation_id, record.timestamp,
+                 record.role, record.content, record.record_type),
+            )
+
+    def list_conversation_records(self, conversation_id: str) -> list[ConversationRecord]:
+        """Trusted internal inspection only; no public transcript endpoint."""
+        validate_conversation_id(conversation_id)
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT message_id, conversation_id, timestamp, role, content, record_type "
+                "FROM conversation_history WHERE conversation_id = ? ORDER BY rowid",
+                (conversation_id,),
+            ).fetchall()
+            return [ConversationRecord(**dict(row)) for row in rows]
+
+    @contextmanager
+    def _hotel_query_connection(self) -> Iterator[sqlite3.Connection]:
+        """A separate read-only handle; never reuse a workflow write connection."""
+        if self._active_connection is not None:
+            raise DatabaseError("Hotel queries require a separate read-only workflow")
+        connection = None
+        deadline = time.monotonic() + HOTEL_QUERY_TIMEOUT_SECONDS
+        try:
+            connection = sqlite3.connect(
+                self.database_path.resolve().as_uri() + "?mode=ro",
+                uri=True, timeout=HOTEL_QUERY_TIMEOUT_SECONDS, cached_statements=0,
+            )
+            connection.execute("PRAGMA query_only = ON")
+            connection.execute("PRAGMA trusted_schema = OFF")
+            # Bound preparation, expressions, values, and expensive computation.
+            connection.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, 10000)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 64000)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_COLUMN, 32)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_EXPR_DEPTH, 50)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_COMPOUND_SELECT, 10)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_VDBE_OP, 50000)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
+            connection.set_progress_handler(lambda: time.monotonic() >= deadline, 1000)
+            yield connection
+            if time.monotonic() >= deadline:
+                raise HotelQueryTimeoutError("The hotel query exceeded its time limit.")
+        except sqlite3.Error as error:
+            code = getattr(error, "sqlite_errorcode", sqlite3.SQLITE_ERROR) & 0xff
+            if code in {
+                sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED, sqlite3.SQLITE_IOERR,
+                sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB,
+            }:
+                raise DatabaseError("The hotel database could not be read.") from None
+            if time.monotonic() >= deadline:
+                raise HotelQueryTimeoutError("The hotel query exceeded its time limit.") from None
+            raise HotelQueryRejectedError("The proposed hotel query was rejected.") from None
+        except MemoryError:
+            raise HotelQueryRejectedError("The hotel query exceeded its resource limits.") from None
+        finally:
+            if connection is not None:
+                connection.close()
+
+    @staticmethod
+    def _authorize_hotel_query(connection: sqlite3.Connection, query: HotelQuery) -> None:
+        """SQLite parses both statements; default-deny authorization checks every read.
+
+        EXPLAIN compiles without running the proposal, including nested SELECTs,
+        unions, and view expansion. Validating the standalone proposal first
+        prevents it from closing or commenting out the outer LIMIT wrapper.
+        """
+        if not isinstance(query, HotelQuery) or not re.match(r"(?i)^(SELECT|WITH)\b", query.sql):
+            raise HotelQueryRejectedError("Only a single hotel SELECT is permitted.")
+        read_tables: set[str] = set()
+
+        def authorize(action, table, column, database, source):
+            if action == sqlite3.SQLITE_SELECT:
+                return sqlite3.SQLITE_OK
+            # SQLite's optimized COUNT/table scan callback has an empty column
+            # and no database name. This handle has only main and no temp tables.
+            if action == sqlite3.SQLITE_READ and (
+                database == "main" or (database is None and column == "")
+            ):
+                if table in HOTEL_QUERY_TABLES:
+                    read_tables.add(table)
+                    return sqlite3.SQLITE_OK
+            if action == sqlite3.SQLITE_FUNCTION and column in HOTEL_QUERY_FUNCTIONS:
+                return sqlite3.SQLITE_OK
+            # Includes writes/DDL/PRAGMA/ATTACH, private tables, table-valued
+            # functions, extension loading, and recursive CTEs.
+            return sqlite3.SQLITE_DENY
+
+        connection.set_authorizer(authorize)
+        connection.execute("EXPLAIN " + query.sql).close()
+        if not read_tables:
+            raise HotelQueryRejectedError("Queries must read approved hotel records.")
+        connection.execute("EXPLAIN " + query.limited_sql).close()
+
+    def validate_hotel_query(self, query: HotelQuery) -> HotelQuery:
+        """Validate without execution so the exact executed SQL can be logged first."""
+        with self._hotel_query_connection() as connection:
+            self._authorize_hotel_query(connection, query)
+        return query
+
+    def execute_hotel_query(self, query: HotelQuery) -> HotelQueryResult:
+        """The sole narrow SQL input boundary; return bounded immutable scalar rows."""
+        with self._hotel_query_connection() as connection:
+            # Recheck on the execution handle, regardless of prior validation.
+            self._authorize_hotel_query(connection, query)
+            cursor = connection.execute(query.limited_sql)
+            columns = tuple(column[0] for column in cursor.description)
+            rows = cursor.fetchmany(MAX_HOTEL_QUERY_ROWS + 1)
+            truncated = len(rows) > MAX_HOTEL_QUERY_ROWS
+            try:
+                HotelQueryResult(columns, tuple(rows[:MAX_HOTEL_QUERY_ROWS]), truncated)
+            except ValueError:
+                raise HotelQueryRejectedError("The hotel query returned unusable values.") from None
+            bounded_rows = []
+            size = len(json.dumps(columns, ensure_ascii=False))
+            for row in rows[:MAX_HOTEL_QUERY_ROWS]:
+                size += len(json.dumps(row, ensure_ascii=False))
+                if size > MAX_HOTEL_RESULT_CHARACTERS:
+                    truncated = True
+                    break
+                bounded_rows.append(tuple(row))
+            return HotelQueryResult(columns, tuple(bounded_rows), truncated)
 
     def save_local_hotel(
         self, hotel: SavedHotel, association: HotelZipAssociation,

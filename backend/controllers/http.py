@@ -28,6 +28,15 @@ from backend.controllers.bookings import (
     update_booking_status,
 )
 from backend.controllers.configuration import geoapify_key_is_configured
+from backend.controllers.chat import (
+    ChatConfigurationError,
+    ChatDataError,
+    ChatProviderError,
+    ChatTimeoutError,
+    ChatUnavailableError,
+    reply_to_chat,
+)
+from backend.controllers.chat_prompt import load_hotel_assistant_prompt
 from backend.controllers.database import (
     DEFAULT_DATA_DIRECTORY,
     DEFAULT_DATABASE_PATH,
@@ -50,10 +59,14 @@ from backend.models.local_hotel import HotelZipAssociation, LocalHotelResult, Sa
 from backend.models.location import ZipLocation
 from backend.controllers.search import SearchDataError, search_available_stays
 from backend.models import User
+from backend.models.chat import ChatMessage
 from backend.models.contracts import (
     BookingCreateRequest,
     BookingResponse,
     BookingStatusRequest,
+    ChatRequest,
+    ChatResponse,
+    ChatErrorResponse,
     HealthResponse,
     HotelAvailabilityResponse,
     LoginRequest,
@@ -87,14 +100,16 @@ def create_app(
     )
     cookie_name = "expedia_session"
     geoapify_configured = False
+    hotel_assistant_prompt = ""
 
     def authentication() -> AuthenticationController:
         return AuthenticationController(database_path, data_directory)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        nonlocal geoapify_configured
+        nonlocal geoapify_configured, hotel_assistant_prompt
         geoapify_configured = geoapify_key_is_configured()
+        hotel_assistant_prompt = load_hotel_assistant_prompt()
         try:
             DatabaseController(database_path).initialize(data_directory)
         except DatabaseError as error:
@@ -112,6 +127,54 @@ def create_app(
                 "key is configured" if geoapify_configured else "key is not configured"
             ),
         )
+
+    @application.post(
+        "/api/chat",
+        response_model=ChatResponse,
+        responses={
+            403: {"model": ChatErrorResponse, "description": "Same-origin header required"},
+            500: {"model": ChatErrorResponse, "description": "Chat storage failure"},
+            502: {"model": ChatErrorResponse, "description": "Chat provider failure"},
+            503: {"model": ChatErrorResponse, "description": "Chat configuration unavailable"},
+        },
+    )
+    def chat(request: ChatRequest) -> ChatResponse:
+        try:
+            result = reply_to_chat(
+                tuple(
+                    ChatMessage(message.role, message.content)
+                    for message in request.messages
+                ),
+                database_path=database_path,
+                conversation_id=str(request.conversation_id) if request.conversation_id else None,
+                prompt=hotel_assistant_prompt,
+            )
+        except ChatDataError:
+            raise HTTPException(
+                status_code=500,
+                detail="The travel assistant could not access its saved data. Please try again.",
+            ) from None
+        except ChatConfigurationError:
+            raise HTTPException(
+                status_code=503,
+                detail="The travel assistant is unavailable. Configure GEMINI_API_KEY and restart the backend.",
+            ) from None
+        except ChatUnavailableError:
+            raise HTTPException(
+                status_code=502,
+                detail="Gemini is temporarily unavailable. Please try again in a moment.",
+            ) from None
+        except ChatTimeoutError:
+            raise HTTPException(
+                status_code=502,
+                detail="Gemini took too long to reply. Please try again.",
+            ) from None
+        except ChatProviderError:
+            raise HTTPException(
+                status_code=502,
+                detail="The travel assistant could not reply. Please try again.",
+            ) from None
+        return ChatResponse.model_validate(result)
 
     zip_error_responses = {
         404: {"model": ZipLookupErrorResponse, "description": "ZIP unresolved"},
@@ -265,6 +328,7 @@ def create_app(
                 "/api/auth/", "/api/bookings", "/api/users", "/api/stays",
                 "/api/demo/zip-location", "/api/zip-location",
                 "/api/zip-hotels", "/api/local-hotels",
+                "/api/chat",
             )
         ):
             response.headers["Cache-Control"] = "no-store"

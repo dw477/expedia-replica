@@ -13,11 +13,13 @@ import StayCard from './components/StayCard.vue'
 import SignInForm from './components/SignInForm.vue'
 import CreateAccountForm from './components/CreateAccountForm.vue'
 import ZipLookupDemo from './components/ZipLookupDemo.vue'
+import ChatAssistant from './components/ChatAssistant.vue'
 import { createAccount, fetchCurrentUser, signIn, signOut } from './api/authentication.js'
 import { ApiError } from './api/request.js'
 import { sortStays } from './utils/stays.js'
 
 const hotelName = ref('')
+const chatAssistant = ref(null)
 const priceOrder = ref('recommended')
 const searchError = ref('')
 const hasSearched = ref(false)
@@ -319,6 +321,14 @@ onMounted(restoreSession)
       <nav class="site-nav" aria-label="Main navigation">
         <a href="#search-title" @click.prevent="focusSearch">Find a stay</a>
         <a href="#history-title">My bookings <span aria-hidden="true">↗</span></a>
+        <button
+          class="nav-chat"
+          type="button"
+          aria-haspopup="dialog"
+          aria-controls="chat-panel"
+          :aria-expanded="Boolean(chatAssistant?.isOpen)"
+          @click="chatAssistant?.openChat($event)"
+        >Travel assistant</button>
         <template v-if="currentUser">
           <span class="account-name">{{ currentUser.display_name }}</span>
           <button class="secondary-button" type="button" :disabled="isAuthBusy" @click="submitSignOut">
@@ -549,4 +559,5 @@ onMounted(restoreSession)
       <a href="#page-title">Back to top <span aria-hidden="true">↑</span></a>
     </footer>
   </main>
+  <ChatAssistant ref="chatAssistant" />
 </template>

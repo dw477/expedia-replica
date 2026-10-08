@@ -3,7 +3,7 @@
 ## Repository and commit #DONE
 Repository: https://github.com/dw477/expedia-replica
 
-Commit: 765c29f
+Commit: 8b10dea
 
 ## Research Notes
 Research was limited to API functionality. With this, I found that Geoapify supported the hotel search functionality outright with limited extra integration. 

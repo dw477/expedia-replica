@@ -58,6 +58,21 @@ SCHEMA_STATEMENTS = (
     """,
     "CREATE INDEX IF NOT EXISTS idx_saved_hotel_zip ON saved_hotel_zip_locations(postcode)",
     """
+    CREATE TABLE IF NOT EXISTS conversation_history (
+        message_id TEXT NOT NULL PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        timestamp INTEGER NOT NULL CHECK (typeof(timestamp) = 'integer' AND timestamp >= 0),
+        role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+        content TEXT NOT NULL CHECK (length(trim(content)) > 0 AND length(content) <= 16000),
+        record_type TEXT NOT NULL CHECK (
+            record_type IN ('message', 'generated_sql', 'executed_sql', 'result_summary', 'error')
+            AND ((record_type = 'message' AND role IN ('user', 'assistant'))
+                OR (record_type != 'message' AND role = 'system'))
+        )
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_conversation_history_id ON conversation_history(conversation_id)",
+    """
     CREATE TABLE IF NOT EXISTS app_metadata (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL

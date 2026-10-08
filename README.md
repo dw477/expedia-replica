@@ -217,6 +217,90 @@ node --test tests/*.test.js
 
 Do not commit real credentials, API keys, or local environment files.
 
+## Travel assistant chatbot
+
+The floating **Travel assistant** button and the navigation button open a compact
+chat popup. Ask a question, choose a suggested question, or continue a conversation.
+After each answer, the suggested questions change to follow-ups based on that
+question and answer. They appear below the reply; selecting one sends a follow-up.
+Close it with the close button or Escape; your draft and conversation stay available
+when you reopen it. A pending reply can finish while the popup is closed.
+Enter sends; Shift + Enter inserts a new line. **New chat** clears the visible
+conversation and starts a new conversation ID; existing server records remain.
+Failed requests restore the message for retry. Chat is public and independent of
+sign-in, hotel search, and bookings.
+
+Install the updated backend requirements, then set these values in the project-root
+`.env` (never a frontend `VITE_` variable):
+
+```sh
+backend/.venv/bin/python -m pip install -r backend/requirements.txt
+```
+
+```dotenv
+GEMINI_API_KEY=your-api-key
+GEMINI_MODEL=gemini-3.8-flash
+```
+
+Get a key from [Google AI Studio](https://aistudio.google.com/apikey). The model is
+optional and defaults to `gemini-3.8-flash`; use a model supported by your account's
+Interactions API. Process environment values override `.env`. Restart the backend
+after configuration changes. An unconfigured assistant displays an error without
+affecting hotel search or other features.
+
+`POST /api/chat` accepts `{ "messages": [{ "role": "user", "content": "Which saved hotels in ZIP 02108 have a room on October 10, 2026?" }] }`
+and an optional `conversation_id` (version-4 UUID). The browser keeps that ID in
+page memory and reuses it for follow-ups and retries. Other fields are rejected.
+It returns `{ "reply": "...", "suggestions": ["..."] }`, with up to three
+short, distinct follow-up questions (or an empty array). Send alternating user/assistant messages ending
+with the current user question. Requests require the existing CSRF header and all
+responses use `Cache-Control: no-store`. Invalid input returns 422, missing CSRF
+returns 403, missing configuration returns 503, storage failures return a safe
+500, and provider or rejected-query failures return a safe 502. Provider 503
+outages show "Gemini is temporarily unavailable. Please try again
+in a moment." Timeouts show "Gemini took too long to reply. Please try again."
+Other provider failures keep the generic safe message. The API key and provider
+metadata never appear in response bodies or error logs. A key can be configured
+correctly while Gemini's service is unavailable; retry after the provider recovers.
+
+The assistant reads [prompts/hotel-assistant.md](prompts/hotel-assistant.md) once
+at backend startup. This separate file contains its purpose, actual SQLite columns,
+the JOIN from `saved_hotels` to `saved_hotel_zip_locations` by `hotel_id`, and the
+JOIN to `demo_hotel_nights` by `hotel_id`. **Restart the backend after editing the
+prompt**; Python's `--reload` does not reliably notice Markdown edits.
+
+`backend/controllers/chat.py` makes two server-side `google-genai` requests with
+`client.interactions.create()` and `interaction.output_text`, following
+[Google's Interactions documentation](https://ai.google.dev/gemini-api/docs/interactions-overview).
+The browser sends up to 10 complete recent exchanges plus the new question, within
+32,000 characters total; each message is limited to 8,000 characters. Provider
+calls have a 30-second timeout with automatic retries disabled and a 1,024-token
+output limit per request. The first request proposes SQL from the question and
+schema. The backend parses and authorizes one read-only SELECT against only the
+three saved hotel tables on a separate read-only connection. It blocks private
+tables, writes, multiple statements, and unsafe functions, and enforces a one-second
+execution deadline, 100 returned rows, and a bounded result size. The second request
+receives the original question and those rows and answers from them, acknowledging
+empty results. That same request generates suggested questions based on the latest
+question and answer, using a validated JSON response schema. No extra LLM call is
+needed for suggestions. Both requests include the loaded prompt and use `store=False`.
+
+Ask about ZIPs, dates, available rooms, and cheapest saved options. Rates convert
+from stored integer cents to dollars. Multi-night stays require records and enough
+rooms for every night; missing dated records mean availability is unknown. Answers
+label rates and rooms **simulated classroom data** and describe only the saved
+subset. The assistant cannot read accounts or Assignment 1 bookings or mutate data.
+
+Schema version 6 adds `conversation_history` without resetting existing data. The
+server stores separate user/assistant messages with IDs, conversation ID, timestamp,
+role, and content. It also commits clearly labeled generated SQL, executed SQL,
+result summaries, and safe errors as each step occurs. These trusted writes are
+separate from the model's read-only hotel query; a later failure preserves earlier
+records. Browser context is not logged again on follow-ups. The visible transcript
+and conversation ID stay in page memory, without browser storage; resetting the
+popup does not delete server records. There is no public transcript-read endpoint.
+Chat schemas live in `backend/models/contracts.py` and `/openapi.json`.
+
 ## Assignment 2 local hotel demo
 
 ZIP lookup checks saved hotels first. Matching local results use their stored ZIP
@@ -232,6 +316,6 @@ per night. Repeated saves preserve existing rates/inventory. **Remove from Local
 removes that saved hotel, all its ZIP associations, and its demo nights atomically.
 This classroom storage is shared, independent of sign-in and Assignment 1 bookings.
 
-Startup additively applies schema version 5 to the same SQLite database; no reset,
+Startup additively applies schema version 6 to the same SQLite database; no reset,
 new dependencies, or new setup commands are needed. See `docs/design.md` for the
 local endpoint and storage contracts.

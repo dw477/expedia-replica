@@ -56,7 +56,9 @@ These rules apply throughout the repository.
   (ID order), `create(entity) -> entity`, `update(entity) -> entity`, and
   `delete(Model, id) -> None`. Updates take a complete replacement under the same
   ID; they do not rename IDs. Call initialize before CRUD on a new database.
-  Do not pass SQL, arbitrary table names, or SQLite rows across controller boundaries.
+  Do not pass arbitrary table names or SQLite rows across controller boundaries.
+  The only SQL input exception is the typed, untrusted `HotelQuery` proposal for
+  the hotel assistant, checked by the database controller's default-deny guard.
 - Database errors are explicit: `RecordNotFoundError` for missing entities or
   references, `ReferenceConflictError` for referenced-parent deletion,
   `RecordConflictError` for uniqueness/constraint conflicts, and `DatabaseError`
@@ -272,3 +274,96 @@ These rules apply throughout the repository.
   pending mutations and ZIP changes during a mutation. Keep selection buttons
   separate from Add/Remove. Label local results as a saved subset, never a complete
   area listing, and label all rates/rooms as simulated classroom data.
+
+## External LLM Chat Contracts
+
+- `models/chat.py` owns immutable `ChatMessage`, `ChatConversation`, and `ChatReply`.
+  Messages are trimmed, nonblank text of at most 8000 characters, with only
+  `user`/`assistant` roles. Conversations have 1–21 alternating messages, starting
+  and ending with user, with at most 32000 total characters.
+- `controllers/chat.py` exposes
+  `reply_to_chat(messages: tuple[ChatMessage, ...], *, database_path,
+  conversation_id=None, prompt=None) -> ChatReply`. Invalid input
+  raises `ValueError` before provider access. Missing configuration raises
+  `ChatConfigurationError`; SDK/transport or unusable response failures raise
+  sanitized `ChatProviderError`. Use a per-workflow `google-genai` client, finite
+  30-second timeout, no automatic retries, and a 1024-token output limit. Map
+  messages to text-only Interactions steps; require completed, usable text replies.
+  Each successful turn makes two requests: first propose a hotel SELECT from the
+  question/schema, then answer from the original question and retrieved rows.
+  The second request uses a JSON response schema for a plain-text `reply` and
+  up to three distinct `suggestions`, each trimmed, nonblank, and at most 160
+  characters. Generate these follow-up questions from the latest question and
+  answer in that same request; no additional provider call. Validate the entire
+  envelope before returning it; malformed envelopes raise `ChatProviderError`.
+  Provider HTTP 503 raises `ChatUnavailableError`; wrapped transport timeouts
+  raise `ChatTimeoutError` (both `ChatProviderError` subclasses). Classify using
+  numeric status and exception types, never raw messages. Logs contain only fixed
+  safe descriptions of outages/timeouts.
+- Keep `GEMINI_API_KEY` and optional `GEMINI_MODEL` in backend configuration,
+  loading root `.env` with process overrides. Default to `gemini-3.8-flash`.
+  Never expose credentials, provider URLs, raw SDK errors, or provider metadata.
+  Restart after configuration changes; preserve the existing health contract.
+- Store assistant purpose, actual schema, both hotel-ID JOINs, ZIP/date/room
+  filters, numeric price ordering, cents-to-dollars conversion, missing-date
+  semantics, and simulated-data labels in `prompts/hotel-assistant.md`.
+  Load this file once at backend startup and include it in both LLM requests;
+  restart after editing. AGENTS.md is repository guidance, not the LLM prompt.
+- `models/hotel_query.py` owns immutable `HotelQuery`/`HotelQueryResult` contracts.
+  Only `DatabaseController.validate_hotel_query`/`execute_hotel_query` accept
+  proposals. Permit one SELECT (optional nonrecursive WITH) reading only
+  `saved_hotels`, `saved_hotel_zip_locations`, and `demo_hotel_nights`. Parse with
+  SQLite before execution; default-deny authorization covers nested reads and
+  functions. Use a separate mode=ro, query-only connection, no extensions, a
+  backend outer LIMIT, 100 returned rows, a 32,000-character result bound, and
+  a one-second execution deadline. Deny writes, private tables, schema inspection,
+  PRAGMA, ATTACH, recursive CTEs, multiple statements, and unsafe functions.
+  Revalidate on the execution handle. Rejected/timed-out queries raise
+  `HotelQueryRejectedError`/`HotelQueryTimeoutError`, mapped to `ChatQueryError`;
+  storage failures raise `ChatDataError`. Missing dated records mean unknown
+  availability; a multi-night stay requires sufficient rooms on every night.
+- Public `POST /api/chat` accepts `{messages: [{role, content}, ...]}` and an
+  optional version-4 UUID `conversation_id` for grouping server records, and
+  returns exactly `{reply, suggestions}` on 200. `suggestions` is a string array,
+  including an empty array when appropriate. Reject unknown fields/system roles with 422;
+  configuration failures return fixed safe 503, provider/query failures fixed
+  safe 502, and storage failures fixed safe 500.
+  Require the existing CSRF header (403 if absent), and use no-store on all replies.
+  HTTP schemas remain in `models/contracts.py` and `/openapi.json`.
+  Provider outages return "Gemini is temporarily unavailable. Please try again
+  in a moment." Timeouts return "Gemini took too long to reply. Please try again."
+  These remain 502; other provider failures keep the generic safe message.
+- Keep chat state, accessible log/composer, loading, retry, and reset in the View;
+  call the backend only through `frontend/src/api/chat.js`. Send up to 10 recent
+  complete exchanges plus the current question, dropping oldest pairs to fit the
+  character bound. Prevent duplicate submits/reset while busy; restore failed
+  drafts without adding failed exchanges to history. Render escaped plain text.
+  A floating launcher and navigation button open a responsive nonmodal popup;
+  closing/Escape restores focus to the opener and preserves drafts/history.
+  Pending replies may finish while closed without stealing focus.
+  Show starter questions before the first exchange and replace them with the
+  latest successful answer's suggestions below the transcript. Hide suggestions
+  while busy; failures preserve the previous successful set. New chat restores
+  starter questions. Suggestions are optional actions, not transcript messages.
+  Keep the chat-help paragraph and keyboard/storage footer removed; avoid stale
+  aria-describedby references to those elements.
+- Chat reads only shared Assignment 2 saved hotel data, never account information
+  or Assignment 1 booking operations. Answer only from retrieved records,
+  acknowledge empty/truncated results, and label rates/rooms as simulated
+  classroom data. Do not connect the LLM to authoritative mutations.
+- Schema version 6 adds `conversation_history`. `models/conversation.py` owns
+  immutable records with message ID, conversation ID, Unix-millisecond timestamp,
+  role, content, and record type. Store current user and final assistant messages
+  separately (`role=user/assistant`, `record_type=message`); never duplicate replayed
+  browser history. Log `generated_sql`, `executed_sql` (the exact bounded query
+  submitted after validation), `result_summary`, and sanitized `error` records
+  with role=system as each stage occurs, before advancing. Errors contain only
+  stage and safe error code, never SDK/SQLite exception text or credentials.
+  Database-controller log writes each commit in a separate trusted transaction;
+  failures retain earlier steps. Hotel reads cannot access conversation history.
+- The View keeps its transcript and a conversation UUID in page memory, without
+  browser storage; follow-ups/retries reuse the UUID, and New chat creates another
+  UUID without deleting server logs. Document server persistence in README.md.
+  No public transcript-read API is provided; IDs group records, not authorize
+  access. Continue using `store=False` on both provider interactions. Test with
+  fake transports/responses rather than real keys or live LLM calls.

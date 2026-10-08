@@ -85,13 +85,23 @@ svg {
   font-size: 14px;
   font-weight: 700;
 }
-.site-nav a {
+.site-nav a,
+.site-nav .nav-chat {
   display: flex;
   min-height: 44px;
   align-items: center;
   gap: 8px;
 }
+.nav-chat {
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
 .site-nav a:hover,
+.site-nav .nav-chat:hover,
 .site-footer a:hover {
   color: #1464d5;
 }
